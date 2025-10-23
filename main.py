@@ -25,7 +25,7 @@ options:
 
 import logging
 
-import gym
+import gymnasium as gym
 import numpy as np
 import pandas as pd
 from docopt import docopt
@@ -107,8 +107,8 @@ class SelfPlay:
         self.env = gym.make(env_name, initial_stacks=self.stack, render=self.render)
         for _ in range(num_of_plrs):
             player = RandomPlayer()
-            self.env.add_player(player)
-
+            self.env.unwrapped.add_player(player)  # Use unwrapped to access add_player
+    
         self.env.reset()
 
     def key_press_agents(self):
