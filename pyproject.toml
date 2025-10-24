@@ -3,7 +3,7 @@ name = "neuron-poker"
 version = "0.1.0"
 description = ""
 authors = [{ name = "Nicolas Dickreuter", email = "dickreuter@gmail.com" }]
-requires-python = "~=3.11"
+requires-python = "~=3.11.0"
 readme = "readme.rst"
 dependencies = [
     "pandas>=2.2.0,<3",

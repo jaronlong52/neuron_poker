@@ -135,22 +135,26 @@ class HoldemTable(Env):
             low=-np.inf, high=np.inf, shape=(total_size,), dtype=np.float32
         )
 
-    def reset(self):
+    def reset(self, seed=None, options=None):
         """Reset after game over."""
+        # Set random seed for reproducibility
+        if seed is not None:
+            np.random.seed(seed)
+
         self.observation = None
         self.reward = None
         self.info = None
         self.done = False
         self.funds_history = pd.DataFrame()
         self.first_action_for_hand = [True] * len(self.players)
-    
+
         if not self.players:
             log.warning("No agents added. Add agents before resetting the environment.")
             return self.array_everything, self.info
-    
+
         for player in self.players:
             player.stack = self.initial_stacks
-    
+
         self.dealer_pos = 0
         max_steps_after_raiser = (self.max_raises_per_player_round - 1) * len(self.players) - 1
         self.player_cycle = PlayerCycle(self.players, dealer_idx=-1, max_steps_after_raiser=max_steps_after_raiser,
@@ -160,7 +164,7 @@ class HoldemTable(Env):
         self._get_environment()
         if self._agent_is_autoplay() and not self.done:
             self.step('initial_player_autoplay')
-    
+
         return self.array_everything, self.info
 
     def step(self, action):
