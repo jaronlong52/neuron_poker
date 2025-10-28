@@ -112,15 +112,16 @@ class SelfPlay:
         self.env.reset()
 
     def key_press_agents(self):
-        """Create an environment with 6 key press agents"""
+        """Create an environment with 2 key-press agents (human-controlled)"""
         from agents.agent_keypress import Player as KeyPressAgent
         env_name = 'neuron_poker-v0'
-        num_of_plrs = 2
+        num_of_plrs = 2                     # change if you want more opponents
         self.env = gym.make(env_name, initial_stacks=self.stack, render=self.render)
+    
         for _ in range(num_of_plrs):
             player = KeyPressAgent()
-            self.env.add_player(player)
-
+            self.env.unwrapped.add_player(player)   # <-- UNWRAPPED!
+    
         self.env.reset()
 
     def equity_vs_random(self):
