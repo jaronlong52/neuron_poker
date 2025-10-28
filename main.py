@@ -83,6 +83,12 @@ def command_line_parser():
 
         elif args['my-agent']:
             runner.my_agent_play()
+        
+        elif args['my-agent-train']:
+            runner.my_agent_manual_training()
+            
+        elif args['my-agent-eval']:
+            runner.my_agent_evaluation()
 
 
     else:
@@ -255,34 +261,289 @@ class SelfPlay:
         print(league_table)
         print(f"Best Player: {best_player}")
 
-    def my_agent_play(self):
-        """1 MyAgent vs 5 random"""
+
+
+
+    def my_agent_manual_training(self):
+        """
+        Manual training loop for poker agent - similar to blackjack training
+        This gives you full control over the training process
+        """
         from agents.agent_my_agent import Player as MyAgent
         from agents.agent_random import Player as RandomPlayer
-
+        
+        print("="*60)
+        print("MANUAL TRAINING MODE - Poker Agent")
+        print("="*60)
+        
+        # Training configuration
+        USE_TRAINED_WEIGHTS = False
         env_name = 'neuron_poker-v0'
-
-        self.stack = 10 # hard coded for simplicity
-
+        
+        # Hyperparameters
+        episodes = 50000  # Number of hands to play
+        epsilon_start = 1.0 if not USE_TRAINED_WEIGHTS else 0.1
+        epsilon_end = 0.01
+        epsilon_decay = 0.99995  # Slightly faster decay for poker
+        alpha = 0.01
+        gamma = 0.99
+        weights_file = "poker_weights.npy"
+        
+        print(f"Training Configuration:")
+        print(f"  Episodes: {episodes}")
+        print(f"  Initial epsilon: {epsilon_start}")
+        print(f"  Final epsilon: {epsilon_end}")
+        print(f"  Learning rate (alpha): {alpha}")
+        print(f"  Discount factor (gamma): {gamma}")
+        print(f"  Stack size: {self.stack}")
+        print()
+        
+        # Create environment
         self.env = gym.make(env_name, initial_stacks=self.stack, render=self.render)
-
-        # Add players via unwrapped
-        self.env.unwrapped.add_player(MyAgent(name='MyAgent'))
+        
+        # Create training agent with ALL required parameters
+        training_agent = MyAgent(
+            epsilon=epsilon_start,
+            alpha=alpha,
+            gamma=gamma,
+            name="TrainingAgent",
+            stack_size=self.stack,
+            weights_file=weights_file if USE_TRAINED_WEIGHTS else None
+        )
+        
+        # Verify agent has all necessary attributes
+        assert hasattr(training_agent, 'name'), "Agent missing 'name' attribute"
+        assert hasattr(training_agent, 'stack'), "Agent missing 'stack' attribute"
+        assert hasattr(training_agent, 'autoplay'), "Agent missing 'autoplay' attribute"
+        assert hasattr(training_agent, 'epsilon'), "Agent missing 'epsilon' attribute"
+        assert hasattr(training_agent, 'alpha'), "Agent missing 'alpha' attribute"
+        assert hasattr(training_agent, 'gamma'), "Agent missing 'gamma' attribute"
+        assert hasattr(training_agent, 'weights'), "Agent missing 'weights' attribute"
+        
+        # Add players to environment
+        self.env.unwrapped.add_player(training_agent)
         for i in range(5):
             self.env.unwrapped.add_player(RandomPlayer(name=f'Random_{i+1}'))
+        
+        # Training tracking
+        episode_rewards = []
+        wins = []
+        agent_index = 0  # Training agent is first player
+        
+        # Storage for experience tuples during an episode
+        episode_experiences = []
+        
+        print("Starting training...")
+        print()
+        
+        for episode in range(episodes):
+            # Reset environment for new hand
+            observation, info = self.env.reset()
+            
+            # Clear experiences from previous episode
+            episode_experiences = []
+            
+            # Track episode data
+            episode_reward = 0
+            done = False
+            step_count = 0
+            
+            # Play one complete hand (episode)
+            while not done:
+                # Get current player index
+                current_player_idx = self.env.unwrapped.current_player_seat
+                
+                # Check if it's our training agent's turn
+                if current_player_idx == agent_index:
+                    # Extract the processed observation that agent uses
+                    prev_info_obs = info.get('observation', {})
+                    
+                    # Get valid actions for current state
+                    action_space = self.env.unwrapped.legal_moves
+                    
+                    # Agent chooses action (epsilon-greedy handled in agent.action())
+                    action = training_agent.action(action_space, observation, info)
+                    
+                    # Execute action in environment
+                    next_observation, reward, terminated, truncated, next_info = self.env.step(action)
+                    done = terminated or truncated
+                    
+                    # Extract next processed observation
+                    next_info_obs = next_info.get('observation', {})
+                    
+                    # Store experience tuple with the PROCESSED observations
+                    episode_experiences.append({
+                        'obs': prev_info_obs,           # Processed observation (dict)
+                        'action': action,               # Action enum
+                        'reward': reward,               # Reward received
+                        'next_obs': next_info_obs,      # Next processed observation (dict)
+                        'done': done                    # Terminal flag
+                    })
+                    
+                    # Update for next iteration
+                    observation = next_observation
+                    info = next_info
+                    episode_reward += reward
+                    
+                else:
+                    # Other player's turn - just step the environment
+                    next_observation, reward, terminated, truncated, next_info = self.env.step(None)
+                    done = terminated or truncated
+                    observation = next_observation
+                    info = next_info
+                
+                step_count += 1
+                
+                # Safety check to prevent infinite loops
+                if step_count > 1000:
+                    print(f"Warning: Episode {episode} exceeded 1000 steps. Breaking.")
+                    done = True
+            
+            # Episode finished - now do the learning updates
+            for exp in episode_experiences:
+                # Call agent's update method with processed observations
+                training_agent.update(
+                    obs=exp['obs'],           # Dict from info['observation']
+                    action=exp['action'],     # Action enum
+                    reward=exp['reward'],     # Float reward
+                    next_obs=exp['next_obs'], # Dict from next info['observation']
+                    terminated=exp['done']    # Boolean
+                )
+            
+            # Track episode statistics
+            episode_rewards.append(episode_reward)
+            winner_idx = self.env.unwrapped.winner_ix
+            wins.append(1 if winner_idx == agent_index else 0)
+            
+            # Decay epsilon
+            training_agent.epsilon = max(epsilon_end, training_agent.epsilon * epsilon_decay)
+            
+            # Print progress
+            if (episode + 1) % 1000 == 0:
+                avg_reward = np.mean(episode_rewards[-1000:])
+                win_rate = np.mean(wins[-1000:]) * 100
+                avg_error = np.mean(training_agent.training_error[-1000:]) if training_agent.training_error else 0
+                
+                print(f"Episode {episode + 1}/{episodes}")
+                print(f"  Avg Reward (last 1000): {avg_reward:.3f}")
+                print(f"  Win Rate (last 1000): {win_rate:.1f}%")
+                print(f"  Epsilon: {training_agent.epsilon:.4f}")
+                print(f"  Avg TD Error: {avg_error:.4f}")
+                print()
+            
+            # Save weights periodically
+            if (episode + 1) % 10000 == 0:
+                checkpoint_file = f"poker_weights_ep{episode + 1}.npy"
+                training_agent.save_weights(checkpoint_file)
+                print(f"Checkpoint saved: {checkpoint_file}")
+        
+        # Training complete
+        print("="*60)
+        print("TRAINING COMPLETE!")
+        print("="*60)
+        print(f"Final Statistics (last 1000 episodes):")
+        print(f"  Average Reward: {np.mean(episode_rewards[-1000:]):.3f}")
+        print(f"  Win Rate: {np.mean(wins[-1000:]) * 100:.1f}%")
+        print(f"  Final Epsilon: {training_agent.epsilon:.4f}")
+        print()
+        
+        # Save final weights
+        final_weights_file = "poker_weights_final.npy"
+        training_agent.save_weights(final_weights_file)
+        print(f"Final weights saved to: {final_weights_file}")
+        
+        # Plot training curves (optional)
+        if self.funds_plot:
+            import matplotlib.pyplot as plt
+            
+            fig, axes = plt.subplots(2, 1, figsize=(12, 8))
+            
+            # Plot rewards
+            window = 100
+            rewards_smooth = pd.Series(episode_rewards).rolling(window=window).mean()
+            axes[0].plot(rewards_smooth)
+            axes[0].set_title(f'Average Reward (smoothed over {window} episodes)')
+            axes[0].set_xlabel('Episode')
+            axes[0].set_ylabel('Reward')
+            axes[0].grid(True)
+            
+            # Plot win rate
+            win_rate_smooth = pd.Series(wins).rolling(window=window).mean() * 100
+            axes[1].plot(win_rate_smooth)
+            axes[1].set_title(f'Win Rate % (smoothed over {window} episodes)')
+            axes[1].set_xlabel('Episode')
+            axes[1].set_ylabel('Win Rate %')
+            axes[1].axhline(y=16.67, color='r', linestyle='--', label='Random (1/6 players)')
+            axes[1].legend()
+            axes[1].grid(True)
+            
+            plt.tight_layout()
+            plt.savefig('poker_training_curves.png')
+            print("Training curves saved to: poker_training_curves.png")
+            plt.show()
 
-        # something is broken in here
-        for _ in range(self.num_episodes):
+    def my_agent_evaluation(self):
+        """
+        Evaluation mode - test trained agent without exploration
+        """
+        from agents.agent_my_agent import Player as MyAgent
+        from agents.agent_random import Player as RandomPlayer
+        from agents.agent_consider_equity import Player as EquityPlayer
+        print("="*60)
+        print("EVALUATION MODE - Testing Trained Agent")
+        print("="*60)
+        env_name = 'neuron_poker-v0'
+        self.env = gym.make(env_name, initial_stacks=self.stack, render=self.render)
+        # Load trained agent with epsilon=0 (no exploration)
+        trained_agent = MyAgent(
+            epsilon=0.0,  # Pure exploitation
+            alpha=0.0,    # No learning
+            gamma=0.99,
+            name="TrainedAgent",
+            stack_size=self.stack,
+            weights_file="poker_weights_final.npy"
+        )
+        # Add diverse opponents
+        self.env.unwrapped.add_player(trained_agent)
+        self.env.unwrapped.add_player(EquityPlayer(name='Equity_Tight', min_call_equity=.6, min_bet_equity=.7))
+        self.env.unwrapped.add_player(EquityPlayer(name='Equity_Loose', min_call_equity=.3, min_bet_equity=.4))
+        for i in range(3):
+            self.env.unwrapped.add_player(RandomPlayer(name=f'Random_{i+1}'))
+        # Run evaluation games
+        eval_episodes = self.num_episodes if self.num_episodes > 100 else 1000
+        wins = []
+        rewards = []
+        print(f"Running {eval_episodes} evaluation episodes...")
+        print()
+        for episode in range(eval_episodes):
             self.env.reset()
             done = False
+            episode_reward = 0
             while not done:
-                _, _, done, _, _ = self.env.step(None)
-            self.winner_in_episodes.append(self.env.unwrapped.winner_ix)
-
-        league_table = pd.Series(self.winner_in_episodes).value_counts()
-        print("League Table")
-        print("============")
-        print(league_table)
+                _, reward, terminated, truncated, _ = self.env.step(None)
+                done = terminated or truncated
+                if self.env.unwrapped.current_player_seat == 0:
+                    episode_reward += reward
+            winner_idx = self.env.unwrapped.winner_ix
+            wins.append(1 if winner_idx == 0 else 0)
+            rewards.append(episode_reward)
+            if (episode + 1) % 100 == 0:
+                print(f"Progress: {episode + 1}/{eval_episodes} - "
+                      f"Current Win Rate: {np.mean(wins) * 100:.1f}%")
+        # Print results
+        print()
+        print("="*60)
+        print("EVALUATION RESULTS")
+        print("="*60)
+        print(f"Total Episodes: {eval_episodes}")
+        print(f"Win Rate: {np.mean(wins) * 100:.1f}%")
+        print(f"Average Reward: {np.mean(rewards):.3f}")
+        print(f"Expected Random Win Rate: {100/6:.1f}% (1 out of 6 players)")
+        print()
+        if np.mean(wins) * 100 > 100/6:
+            print("✓ Agent is performing BETTER than random!")
+        else:
+            print("✗ Agent needs more training or hyperparameter tuning")
 
 
 if __name__ == '__main__':
