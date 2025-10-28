@@ -68,3 +68,13 @@ def main_dqn_train_cpp():
     """Train DQN agent with C++ Monte Carlo"""
     sys.argv = ["main.py", "selfplay", "dqn_train", "--use_cpp_montecarlo"]
     command_line_parser()
+
+def main_my_agent():
+    """Run my-agent (no render)"""
+    sys.argv = ["main.py", "selfplay", "my-agent"]
+    command_line_parser()
+
+def main_my_agent_render():
+    """Run my-agent with rendering"""
+    sys.argv = ["main.py", "selfplay", "my-agent", "--render"]
+    command_line_parser()

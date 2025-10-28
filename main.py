@@ -9,6 +9,7 @@ Usage:
   main.py selfplay dqn_train [options]
   main.py selfplay dqn_play [options]
   main.py learn_table_scraping [options]
+  main.py selfplay my-agent [options]
 
 options:
   -h --help                 Show this screen.
@@ -80,6 +81,9 @@ def command_line_parser():
         elif args['dqn_play']:
             runner.dqn_play_keras_rl(model_name)
 
+        elif args['my-agent']:
+            runner.my_agent_play()
+
 
     else:
         raise RuntimeError("Argument not yet implemented")
@@ -117,11 +121,11 @@ class SelfPlay:
         env_name = 'neuron_poker-v0'
         num_of_plrs = 2                     # change if you want more opponents
         self.env = gym.make(env_name, initial_stacks=self.stack, render=self.render)
-    
+
         for _ in range(num_of_plrs):
             player = KeyPressAgent()
             self.env.unwrapped.add_player(player)   # <-- UNWRAPPED!
-    
+
         self.env.reset()
 
     def equity_vs_random(self):
@@ -250,6 +254,35 @@ class SelfPlay:
         print("============")
         print(league_table)
         print(f"Best Player: {best_player}")
+
+    def my_agent_play(self):
+        """1 MyAgent vs 5 random"""
+        from agents.agent_my_agent import Player as MyAgent
+        from agents.agent_random import Player as RandomPlayer
+
+        env_name = 'neuron_poker-v0'
+
+        self.stack = 10 # hard coded for simplicity
+
+        self.env = gym.make(env_name, initial_stacks=self.stack, render=self.render)
+
+        # Add players via unwrapped
+        self.env.unwrapped.add_player(MyAgent(name='MyAgent'))
+        for i in range(5):
+            self.env.unwrapped.add_player(RandomPlayer(name=f'Random_{i+1}'))
+
+        # something is broken in here
+        for _ in range(self.num_episodes):
+            self.env.reset()
+            done = False
+            while not done:
+                _, _, done, _, _ = self.env.step(None)
+            self.winner_in_episodes.append(self.env.unwrapped.winner_ix)
+
+        league_table = pd.Series(self.winner_in_episodes).value_counts()
+        print("League Table")
+        print("============")
+        print(league_table)
 
 
 if __name__ == '__main__':

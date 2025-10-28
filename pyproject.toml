@@ -34,6 +34,9 @@ poker-keypress-render = "scripts:main_keypress_render"
 poker-equity-render = "scripts:main_equity_render"
 poker-dqn-train-cpp = "scripts:main_dqn_train_cpp"
 
+poker-my-agent = "scripts:main_my_agent"
+poker-my-agent-render = "scripts:main_my_agent_render"
+
 [tool.hatch.build.targets.wheel]
 packages = ["."]
 
