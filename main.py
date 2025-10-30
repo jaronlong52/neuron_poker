@@ -10,6 +10,7 @@ Usage:
   main.py selfplay dqn_play [options]
   main.py learn_table_scraping [options]
   main.py selfplay my-agent [options]
+  main.py selfplay my-agent-train [options]
 
 options:
   -h --help                 Show this screen.

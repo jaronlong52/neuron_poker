@@ -78,3 +78,8 @@ def main_my_agent_render():
     """Run my-agent with rendering"""
     sys.argv = ["main.py", "selfplay", "my-agent", "--render"]
     command_line_parser()
+
+def main_my_agent_train():
+    """Train my-agent"""
+    sys.argv = ["main.py", "selfplay", "my-agent-train"]
+    command_line_parser()

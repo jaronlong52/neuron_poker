@@ -1,14 +1,9 @@
-"""
-Complete Poker Agent combining Player interface with Q-learning Agent
-This file should replace your agent_my_agent.py
-"""
-
 from gym_env.env import Action
 import numpy as np
 import os
 
 # Configuration
-USE_TRAINED_WEIGHTS = True
+USE_TRAINED_WEIGHTS = False
 FEATURE_SIZE = 30  # Increased from 21 for poker features
 NUM_ACTIONS = 7    # FOLD, CHECK, CALL, RAISE_3BB, RAISE_HALF_POT, RAISE_POT, ALL_IN
 
@@ -23,7 +18,7 @@ class Player:
         # ===== Player Interface (required by neuron_poker) =====
         self.name = name
         self.stack = stack_size
-        self.autoplay = True  # CRITICAL: Environment will call action() automatically
+        self.autoplay = False  # CRITICAL: Environment will call action() automatically
         
         # ===== Agent Learning Parameters (from your blackjack agent) =====
         self.epsilon = epsilon
