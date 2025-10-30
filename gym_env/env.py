@@ -617,7 +617,8 @@ class HoldemTable(Env):
             self.legal_moves.append(Action.CALL)
             self.legal_moves.append(Action.FOLD)
 
-        if self.current_player.num_raises_in_street[self.stage] < self.max_raises_per_player_round:
+        if self.stage != Stage.SHOWDOWN and \
+            self.current_player.num_raises_in_street.get(self.stage, 0) < self.max_raises_per_player_round:
             if self.current_player.stack >= 3 * self.big_blind - self.player_pots[self.current_player.seat]:
                 self.legal_moves.append(Action.RAISE_3BB)
 
