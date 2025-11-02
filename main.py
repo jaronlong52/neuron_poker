@@ -268,198 +268,263 @@ class SelfPlay:
     def my_agent_manual_training(self):
         from agents.agent_my_agent import Player as MyAgent
         from agents.agent_random import Player as RandomPlayer
+        from gym_env.env import HoldemTable
+        import numpy as np
+        import pandas as pd
 
         print("="*60)
         print("FINAL MANUAL TRAINING - Stable Q-Learning Poker Agent")
         print("="*60)
 
-        env_name = 'neuron_poker-v0'
-        episodes = 100000
+        num_games_to_play = self.num_episodes
+
         epsilon_start = 1.0
         epsilon_end = 0.01
         epsilon_decay = 0.9999
         alpha = 0.005
         gamma = 0.95
-        weights_file = "poker_weights_final.npy"
+        dest_weights_file = "poker_weights_final.npy"
+        source_weights_file = None # "poker_weights.npy"
 
-        print(f"Episodes: {episodes}, Alpha: {alpha}, Gamma: {gamma}")
+        print(f"Target Games: {num_games_to_play}, Alpha: {alpha}, Gamma: {gamma}")
 
-        # Environment
-        self.env = gym.make(env_name, initial_stacks=self.stack, render=self.render)
+        # -------------------------------------------------
+        # 1. Environment
+        # -------------------------------------------------
+        env_args = {
+            'initial_stacks': self.stack,
+            'small_blind': 10,
+            'big_blind': 20,
+            'render': self.render,
+            'funds_plot': self.funds_plot,
+            'use_cpp_montecarlo': self.use_cpp_montecarlo,
+            'calculate_equity': True
+        }
 
-        # Fix observation dtype and space
-        self.env.observation_space = gym.spaces.Box(
-            low=-np.inf, high=np.inf, shape=(328,), dtype=np.float32
-        )
+        self.env = HoldemTable(**env_args)
 
-        # Agent
+        # -------------------------------------------------
+        # 2. Agent & Players
+        # -------------------------------------------------
         training_agent = MyAgent(
             epsilon=epsilon_start,
             alpha=alpha,
             gamma=gamma,
             name="QAgent",
-            stack_size=self.stack
+            stack_size=self.stack,
+            weights_file=source_weights_file
         )
 
-        # Add players
-        self.env.unwrapped.add_player(training_agent)
-        for i in range(5):
-            self.env.unwrapped.add_player(RandomPlayer(name=f'Random_{i+1}'))
+        self.env.add_player(training_agent)
+        for i in range(2): # Total of 3 players
+            self.env.add_player(RandomPlayer(name=f'Random_{i+1}'))
 
-        # Tracking
+        # -------------------------------------------------
+        # 3. Training loop
+        # -------------------------------------------------
         episode_rewards = []
         wins = []
-        agent_index = 0
-        episode_experiences = []
+        agent_seat = 0
+
+        games_played = 0
 
         print("Training started...")
 
-        for episode in range(episodes):
-            obs, info = self.env.reset()
-            episode_experiences = []
-            episode_reward = 0
-            done = False
-            step_count = 0
+        # This is the outer "Game" loop
+        while games_played < num_games_to_play:
 
-            while not done:
-                curr_idx = self.env.unwrapped.current_player.seat
-                legal = self.env.unwrapped._get_legal_moves()
+            self.log.info(f"--- STARTING GAME {games_played + 1}/{num_games_to_play} ---")
 
-                if curr_idx == agent_index:
-                    action = training_agent.action(legal, obs, info)
-                    exploiting = training_agent.last_exploiting
-                    next_obs, reward, terminated, truncated, next_info = self.env.step(action)
+            # Reset all player stacks for the new game
+            for player in self.env.players:
+                player.stack = self.stack
 
-                    # Clip reward
-                    reward = np.clip(reward, -100, 100)
+            # This is the inner "Hand" loop
+            game_is_over = False
+            while not game_is_over:
+                obs_array, info = self.env.reset()
 
-                    if exploiting:
-                        episode_experiences.append({
-                            'obs': info.get('observation', {}),
-                            'action': action,
-                            'reward': reward,
-                            'next_obs': next_info.get('observation', {}),
-                            'done': terminated or truncated
-                        })
-                    episode_reward += reward
-                else:
-                    opp = self.env.unwrapped.players[curr_idx]
-                    opp_action = opp.action(legal, obs, info)
-                    next_obs, reward, terminated, truncated, next_info = self.env.step(opp_action)
+                # Check if the reset() call itself ended the game
+                if self.env._game_over:
+                    game_is_over = True
+                    break # Break from this inner (hand) loop
 
-                done = terminated or truncated
-                obs, info = next_obs, next_info
-                step_count += 1
-                if step_count > 1000:
-                    done = True
+                episode_reward = 0
+                done = False
 
-            # Update only on exploit actions
-            for exp in episode_experiences:
-                training_agent.update(**exp)
+                while not done:
+                    if self.env.current_player is None or self.env._game_over:
+                        break
 
-            # Stats
-            episode_rewards.append(episode_reward)
-            winner = self.env.unwrapped.winner_ix
-            wins.append(1 if winner == agent_index else 0)
-            training_agent.epsilon = max(epsilon_end, training_agent.epsilon * epsilon_decay)
+                    seat = self.env.current_player.seat
+                    legal = self.env._get_legal_moves() 
 
-            # Logging
-            if (episode + 1) % 5000 == 0:
-                avg_r = np.mean(episode_rewards[-5000:])
-                win_r = np.mean(wins[-5000:]) * 100
-                td_err = np.mean(training_agent.training_error[-5000:]) if training_agent.training_error else 0
-                print(f"Ep {episode+1} | R: {avg_r:+.2f} | Win: {win_r:.1f}% | ε: {training_agent.epsilon:.3f} | TD: {td_err:.3f}")
-                training_agent.save_weights(f"poker_weights_ep{episode+1}.npy")
+                    if legal is None:
+                        break
 
-        # Final save
-        training_agent.save_weights(weights_file)
-        print(f"FINAL WEIGHTS: {weights_file}")
+                    current_obs = obs_array
+                    current_info = info
+
+                    if seat == agent_seat:
+                        action = training_agent.action(legal, current_obs, current_info)
+                        next_obs, reward, terminated, truncated, next_info = self.env.step(action)
+
+                        training_agent.update(
+                            current_obs, current_info, action, reward, next_obs, next_info, terminated
+                        )
+                        episode_reward += reward
+                    else:
+                        opp = self.env.players[seat]
+                        opp_action = opp.agent_obj.action(legal, current_obs, current_info)
+                        next_obs, reward, terminated, truncated, next_info = self.env.step(opp_action)
+
+                    done = terminated or truncated
+                    obs_array = next_obs
+                    info = next_info
+
+                # --- Hand is Done
+                episode_rewards.append(episode_reward)
+                if self.env.winner_ix is not None:
+                    wins.append(1 if self.env.winner_ix == agent_seat else 0)
+                training_agent.epsilon = max(epsilon_end, training_agent.epsilon * epsilon_decay)
+
+                # Logging
+                if len(episode_rewards) % 5000 == 0:
+                    avg_r = np.mean(episode_rewards[-5000:])
+                    win_r = np.mean(wins[-5000:]) * 100
+                    td_err = np.mean(training_agent.training_error[-5000:]) if training_agent.training_error else 0
+
+                    print(f"Hand {len(episode_rewards):6d} (Game {games_played+1}) | R: {avg_r:+6.2f} | Win: {win_r:5.1f}% | "
+                          f"ε: {training_agent.epsilon:.4f} | TD: {td_err:.3f}")
+                    training_agent.save_weights(f"poker_weights_hand{len(episode_rewards)}.npy")
+
+            # --- Game is Over ---
+            games_played += 1 # Increment completed game
+            self.log.info(f"--- GAME {games_played}/{num_games_to_play} COMPLETE ---")
+
+        # --- All Games Done ---
+        training_agent.save_weights(dest_weights_file)
+        print(f"FINAL WEIGHTS: {dest_weights_file}")
+        total_hands = len(episode_rewards)
+        print(f"Training complete. Played {games_played} full game(s) across {total_hands} hands.")
 
         # Plot
         if self.funds_plot:
             import matplotlib.pyplot as plt
             window = 1000
-            r_smooth = pd.Series(episode_rewards).rolling(window).mean()
-            w_smooth = pd.Series(wins).rolling(window).mean() * 100
-
-            plt.figure(figsize=(12, 8))
-            plt.subplot(2,1,1)
-            plt.plot(r_smooth)
-            plt.title('Reward')
-            plt.grid()
-            plt.subplot(2,1,2)
-            plt.plot(w_smooth)
-            plt.axhline(16.67, color='r', linestyle='--', label='Random')
-            plt.title('Win Rate %')
-            plt.legend()
-            plt.tight_layout()
-            plt.savefig('poker_final_curves.png')
-            plt.show()
+            if len(episode_rewards) > window:
+                r_smooth = pd.Series(episode_rewards).rolling(window).mean()
+                w_smooth = pd.Series(wins).rolling(window).mean() * 100
+                plt.figure(figsize=(12,8))
+                plt.subplot(2,1,1); plt.plot(r_smooth); plt.title('Reward'); plt.grid()
+                plt.subplot(2,1,2); plt.plot(w_smooth); plt.axhline(33.33, color='r', ls='--')
+                plt.title('Win Rate %'); plt.legend(['Agent','Random'])
+                plt.tight_layout()
+                plt.savefig('poker_final_curves.png')
+                plt.show()
+            else:
+                print("Not enough hands played to generate a plot.")
 
 
 
     def my_agent_evaluation(self):
-        """
-        Evaluation mode - test trained agent without exploration
-        """
         from agents.agent_my_agent import Player as MyAgent
         from agents.agent_random import Player as RandomPlayer
         from agents.agent_consider_equity import Player as EquityPlayer
+        from gym_env.env import HoldemTable
+
         print("="*60)
         print("EVALUATION MODE - Testing Trained Agent")
         print("="*60)
-        env_name = 'neuron_poker-v0'
-        self.env = gym.make(env_name, initial_stacks=self.stack, render=self.render)
-        # Load trained agent with epsilon=0 (no exploration)
-        trained_agent = MyAgent(
-            epsilon=0.0,  # Pure exploitation
-            alpha=0.0,    # No learning
-            gamma=0.99,
-            name="TrainedAgent",
-            stack_size=self.stack,
+
+        # -------------------------------------------------
+        # 1. Config + env
+        # -------------------------------------------------
+        # Environment
+        env_args = {
+            'initial_stacks': self.stack,
+            'small_blind': 10,
+            'big_blind': 20,
+            'render': self.render,
+            'funds_plot': self.funds_plot,
+            'use_cpp_montecarlo': self.use_cpp_montecarlo,
+            'calculate_equity': True  # MyAgent needs equity to extract features
+        }
+        self.env = HoldemTable(**env_args)
+
+        # -------------------------------------------------
+        # 2. Add agents
+        # -------------------------------------------------
+        training_agent = MyAgent(
+            epsilon=0.0, alpha=0.0, gamma=0.99,
+            name="Trained", stack_size=self.stack,
             weights_file="poker_weights_final.npy"
         )
-        # Add diverse opponents
-        self.env.unwrapped.add_player(trained_agent)
-        self.env.unwrapped.add_player(EquityPlayer(name='Equity_Tight', min_call_equity=.6, min_bet_equity=.7))
-        self.env.unwrapped.add_player(EquityPlayer(name='Equity_Loose', min_call_equity=.3, min_bet_equity=.4))
+        self.env.add_player(training_agent)                                 # seat 0
+        self.env.add_player(EquityPlayer(name='Tight',  min_call_equity=.6, min_bet_equity=.7))
+        self.env.add_player(EquityPlayer(name='Loose',  min_call_equity=.3, min_bet_equity=.4))
         for i in range(3):
-            self.env.unwrapped.add_player(RandomPlayer(name=f'Random_{i+1}'))
-        # Run evaluation games
-        eval_episodes = self.num_episodes if self.num_episodes > 100 else 1000
-        wins = []
-        rewards = []
-        print(f"Running {eval_episodes} evaluation episodes...")
-        print()
-        for episode in range(eval_episodes):
-            self.env.reset()
-            done = False
+            self.env.add_player(RandomPlayer(name=f'Rand_{i+1}'))
+
+        # -------------------------------------------------
+        # 3. Evaluation loop
+        # -------------------------------------------------
+        eval_episodes = max(self.num_episodes, 1000)
+        wins, rewards = [], []
+
+        print(f"Running {eval_episodes} evaluation episodes...\n")
+
+        for ep in range(eval_episodes):
+            obs_array, info = self.env.reset()
             episode_reward = 0
+            done = False
+
             while not done:
-                _, reward, terminated, truncated, _ = self.env.step(None)
-                done = terminated or truncated
-                if self.env.unwrapped.current_player_seat == 0:
+                seat = self.env.current_player.seat
+                legal = self.env._get_legal_moves()
+            
+                if seat == 0:
+                    # 1. Cache the current state
+                    current_obs = obs_array
+                    
+                    # 2. Get action
+                    action = training_agent.action(legal, current_obs, info)
+                    
+                    # 3. Take step (and get next_info)
+                    next_obs, reward, terminated, truncated, next_info = self.env.step(action) # Don't discard info with '_'
+                    
+                    # 4. Call update with all arguments
+                    training_agent.update(current_obs, action, reward, next_obs, terminated) 
+                    
                     episode_reward += reward
-            winner_idx = self.env.unwrapped.winner_ix
-            wins.append(1 if winner_idx == 0 else 0)
+                else:
+                    # ... (opponent logic)
+                    opp = self.env.players[seat]
+                    opp_action = opp.agent_obj.action(legal, current_obs, info)
+                    next_obs, reward, terminated, truncated, next_info = self.env.step(opp_action) # Update next_info
+            
+                done = terminated or truncated
+                obs_array = next_obs
+                info = next_info # Pass the new info dict to the next loop iteration
+
+            wins.append(1 if self.env.winner_ix == 0 else 0)
             rewards.append(episode_reward)
-            if (episode + 1) % 100 == 0:
-                print(f"Progress: {episode + 1}/{eval_episodes} - "
-                      f"Current Win Rate: {np.mean(wins) * 100:.1f}%")
-        # Print results
-        print()
-        print("="*60)
+
+            if (ep + 1) % 100 == 0:
+                print(f"Eval {ep+1}/{eval_episodes} – Win% {np.mean(wins)*100:.1f}")
+
+        # -------------------------------------------------
+        # 4. Results
+        # -------------------------------------------------
+        print("\n" + "="*60)
         print("EVALUATION RESULTS")
         print("="*60)
-        print(f"Total Episodes: {eval_episodes}")
-        print(f"Win Rate: {np.mean(wins) * 100:.1f}%")
-        print(f"Average Reward: {np.mean(rewards):.3f}")
-        print(f"Expected Random Win Rate: {100/6:.1f}% (1 out of 6 players)")
-        print()
-        if np.mean(wins) * 100 > 100/6:
-            print("✓ Agent is performing BETTER than random!")
+        print(f"Win rate: {np.mean(wins)*100:.2f}% (random: 16.67%)")
+        print(f"Avg reward: {np.mean(rewards):.2f}")
+        if np.mean(wins) > 1/6:
+            print("Agent BEATS random!")
         else:
-            print("✗ Agent needs more training or hyperparameter tuning")
+            print("Agent needs more training.")
 
 
 if __name__ == '__main__':

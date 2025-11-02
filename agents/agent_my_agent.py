@@ -37,8 +37,9 @@ class Player:
     ):
         # Required by environment
         self.name = name
-        self.stack = stack_size
         self.autoplay = False
+
+        self.initial_stack = stack_size
 
         # Hyperparameters
         self.epsilon = epsilon
@@ -75,110 +76,112 @@ class Player:
     # CORE METHODS
     # =====================================================================
 
-    def action(self, action_space: List[Action], observation: Any, info: Dict) -> Action:
-        obs_dict = info.get('observation', {})
-        valid_actions = action_space
-    
-        if not valid_actions:
+    def action(self, legal_actions: List[Action], observation: np.ndarray, info: Dict) -> Action:
+        if not legal_actions:
             return Action.FOLD
-    
-        exploiting = np.random.random() >= self.epsilon
-        if exploiting:
-            action = self._choose_greedy(obs_dict, valid_actions)
+
+        if np.random.random() < self.epsilon:
+            return np.random.choice(legal_actions)
         else:
-            action = np.random.choice(valid_actions)
+            return self._choose_greedy(observation, legal_actions, info)
+
+
+    def _choose_greedy(self, obs_array: np.ndarray, legal_actions: List[Action], info: Dict) -> Action:
+        features = self.extract_features(obs_array, info)
+        q_values = np.dot(features, self.weights)
+        legal_q = [(a, q_values[self.action_order.index(a)]) for a in legal_actions]
+        return max(legal_q, key=lambda x: x[1])[0]
     
-        self.last_exploiting = exploiting
-        self.last_obs = obs_dict
-    
-        return action
 
-    def _choose_greedy(self, obs_dict: Dict, valid_actions: List[Action]) -> Action:
-        q_values = np.dot(self.extract_features(obs_dict), self.weights)
-        valid_q = []
-        valid_act = []
+    def update(self, obs: np.ndarray, info: dict, action: Action, reward: float, 
+           next_obs: np.ndarray, next_info: dict, terminated: bool):
+        
+        self.steps += 1
+        if self.steps % self.target_update_freq == 0:
+            self.target_weights = self.weights.copy()
 
-        for a in valid_actions:
-            if a in self.action_order:
-                idx = self.action_order.index(a)
-                valid_q.append(q_values[idx])
-                valid_act.append(a)
+        # Use the info dict
+        features = self.extract_features(obs, info) 
+        q_values = np.dot(features, self.weights)
+        a_idx = self.action_order.index(action)
+        q_sa = q_values[a_idx]
 
-        if not valid_act:
-            return np.random.choice(valid_actions)
+        if terminated:
+            target = reward
+        else:
+            # Use the next_info dict
+            next_features = self.extract_features(next_obs, next_info)
+            next_q = np.dot(next_features, self.target_weights)
+            target = reward + self.gamma * np.max(next_q)
 
-        return valid_act[int(np.argmax(valid_q))]
+        td_error = target - q_sa
+        self.training_error.append(td_error)
+        self.weights[:, a_idx] += self.alpha * td_error * features
 
     # =====================================================================
     # FEATURES
     # =====================================================================
 
-    def extract_features(self, obs_dict: Dict) -> np.ndarray:
+    def extract_features(self, obs_array: np.ndarray, info: Dict) -> np.ndarray:
         features = np.zeros(FEATURE_SIZE, dtype=np.float32)
-        if not isinstance(obs_dict, dict):
-            return features
+
+        # Unpack info
+        player_data = info.get('player_data', {})
+        community_data = info.get('community_data', {})
+        stage_data = info.get('stage_data', [{}])[0]  # first stage
 
         # 0: Equity
-        eq = obs_dict.get('equity', {})
-        features[0] = float(eq.get('me', 0.0))
+        features[0] = player_data.get('equity_to_river_alive', 0.0)
 
         # 1–4: Stage
-        stage = obs_dict.get('stage', 'PREFLOP')
-        if stage == 'PREFLOP': features[1] = 1.0
-        elif stage == 'FLOP':    features[2] = 1.0
-        elif stage == 'TURN':    features[3] = 1.0
-        elif stage == 'RIVER':   features[4] = 1.0
+        stage_idx = min(int(np.argmax(community_data.get('stage', [1,0,0,0]))), 3)
+        features[1 + stage_idx] = 1.0
 
         # 5–7: Position
-        pos = obs_dict.get('position', 0)
-        n = max(obs_dict.get('active_players', 6), 1)
-        norm = pos / max(n - 1, 1)
-        if norm < 0.33:   features[5] = 1.0
-        elif norm < 0.66: features[6] = 1.0
-        else:             features[7] = 1.0
+        pos = player_data.get('position', 0)
+        n_players = len(info.get('community_data', {}).get('active_players', [0]*6))
+        norm_pos = pos / max(n_players - 1, 1) if n_players > 1 else 0
+        if norm_pos < 0.33:   features[5] = 1.0
+        elif norm_pos < 0.66: features[6] = 1.0
+        else:                 features[7] = 1.0
 
         # 8: Pot odds
-        call = obs_dict.get('current_bet', 0) - obs_dict.get('my_contribution', 0)
-        pot = obs_dict.get('pot', 1)
-        features[8] = min(call / max(pot, 1), 2.0)
+        call_amount = community_data.get('min_call_at_action', [0]*6)[pos]
+        pot = community_data.get('community_pot', 0) + community_data.get('current_round_pot', 0)
+        features[8] = min(call_amount / max(pot, 1), 2.0)
 
         # 9: Stack ratio
-        features[9] = obs_dict.get('my_stack', 500) / (self.stack or 500)
+        my_stack = player_data.get('stack', [500])[0]
+        features[9] = my_stack / (self.initial_stack or 500)
 
         # 10: Pot size
-        features[10] = pot / ((self.stack or 500) * 6)
+        features[10] = pot / ((self.initial_stack or 500) * 6)
 
         # 11: Investment ratio
-        features[11] = obs_dict.get('my_contribution', 0) / max(pot, 1)
+        contrib = stage_data.get('contribution', [0]*6)[pos]
+        features[11] = contrib / max(pot, 1)
 
         # 12: Active players
-        features[12] = n / 6.0
+        features[12] = n_players / 6.0
 
         # 13: Call cost / stack
-        features[13] = call / max(obs_dict.get('my_stack', 1), 1)
+        features[13] = call_amount / max(my_stack, 1)
 
         # 14: Stack in BB
-        bb = obs_dict.get('big_blind', 10)
-        features[14] = obs_dict.get('my_stack', 500) / bb
+        bb = community_data.get('big_blind', 10)
+        features[14] = my_stack / bb
 
         # 15: Raises this round
-        features[15] = min(obs_dict.get('num_raises_this_round', 0) / 5.0, 1.0)
+        raises = sum(stage_data.get('raises', [0]*6))
+        features[15] = min(raises / 5.0, 1.0)
 
-        # 16: Aggression
-        bets = sum(obs_dict.get('bets_this_round', [0]))
+        # 16: Aggression (total bets)
+        bets = sum(stage_data.get('contribution', [0]*6))
         features[16] = min(bets / (pot + 1), 3.0)
 
-        # 17–20: Hand strength
-        hand = obs_dict.get('hole_cards', [])
-        if len(hand) == 2:
-            r1 = self._card_rank(hand[0])
-            r2 = self._card_rank(hand[1])
-            suited = hand[0][-1] == hand[1][-1]
-            strength = self._hand_strength(r1, r2, suited)
-            features[17] = strength
-            features[18] = 1.0 if strength > 0.8 else 0.0
-            features[19] = 1.0 if strength > 0.6 else 0.0
-            features[20] = 1.0 if strength > 0.4 else 0.0
+        # 17–20: Hand strength (skip for now — needs card parsing)
+        # Or set to 0.5
+        features[17:21] = 0.5
 
         return features
 
@@ -200,34 +203,6 @@ class Player:
             return 0.5
         else:
             return max(0.1, 0.4 - gap * 0.1)
-
-    # =====================================================================
-    # UPDATE
-    # =====================================================================
-
-    def update(self, obs: Dict, action: Action, reward: float, next_obs: Dict, terminated: bool):
-        self.steps += 1
-        if self.steps % self.target_update_freq == 0:
-            self.target_weights = self.weights.copy()
-
-        features = self.extract_features(obs)
-        q_values = np.dot(features, self.weights)
-
-        if action not in self.action_order:
-            return
-        a_idx = self.action_order.index(action)
-        q_sa = q_values[a_idx]
-
-        if terminated:
-            target = reward
-        else:
-            next_features = self.extract_features(next_obs)
-            next_q = np.dot(next_features, self.target_weights)
-            target = reward + self.gamma * np.max(next_q)
-
-        td_error = target - q_sa
-        self.training_error.append(td_error)
-        self.weights[:, a_idx] += self.alpha * td_error * features
 
     # =====================================================================
     # PERSISTENCE
