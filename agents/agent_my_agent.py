@@ -17,7 +17,7 @@ from typing import List, Dict, Any, Tuple
 
 # Configuration
 FEATURE_SIZE = 30
-NUM_ACTIONS = 7
+NUM_ACTIONS = 8
 
 
 class Player:
@@ -37,7 +37,6 @@ class Player:
     ):
         # Required by environment
         self.name = name
-        self.autoplay = False
 
         self.initial_stack = stack_size
 
@@ -60,6 +59,7 @@ class Player:
             Action.RAISE_3BB,
             Action.RAISE_HALF_POT,
             Action.RAISE_POT,
+            Action.RAISE_2POT,
             Action.ALL_IN
         ]
 
