@@ -86,6 +86,11 @@ def command_line_parser():
             runner.my_agent_play()
         
         elif args['my-agent-train']:
+            runner = CustomAgent(
+                render=args['--render'],
+                stack=int(args['--stack']),
+                num_episodes=num_episodes
+            )
             runner.my_agent_manual_training()
             
         elif args['my-agent-eval']:
@@ -263,276 +268,63 @@ class SelfPlay:
         print(f"Best Player: {best_player}")
 
 
-
+class CustomAgent:
+    def __init__(self, render=False, stack=500, num_episodes=10):
+        self.render = render
+        self.stack = stack
+        self.num_episodes = num_episodes
 
     def my_agent_manual_training(self):
         from agents.agent_my_agent import Player as MyAgent
         from agents.agent_random import Player as RandomPlayer
-        from gym_env.env import HoldemTable
-        from gym_env.enums import Action
 
-        print("="*60)
-        print("FINAL MANUAL TRAINING - Stable Q-Learning Poker Agent")
-        print("="*60)
-
-        num_games_to_play = self.num_episodes
         epsilon_start = 1.0
         epsilon_end = 0.01
         epsilon_decay = 0.9999
         alpha = 0.005
         gamma = 0.95
         dest_weights_file = "poker_weights_final.npy"
-        source_weights_file = None
 
-        print(f"Target Games: {num_games_to_play}, Alpha: {alpha}, Gamma: {gamma}")
+        env_name = 'neuron_poker-v0'
+        env = gym.make(env_name, initial_stacks=self.stack, render=self.render)
 
-        # -------------------------------------------------
-        # 1. Environment Setup
-        # -------------------------------------------------
-        env_args = {
-            'initial_stacks': self.stack,
-            'small_blind': 10,
-            'big_blind': 20,
-            'render': self.render,
-            'funds_plot': self.funds_plot,
-            'use_cpp_montecarlo': self.use_cpp_montecarlo,
-            'calculate_equity': True
-        }
-        self.env = HoldemTable(**env_args)
-
-        # -------------------------------------------------
-        # 2. Create Training Agent
-        # -------------------------------------------------
         training_agent = MyAgent(
             epsilon=epsilon_start,
             alpha=alpha,
             gamma=gamma,
             name="QAgent",
-            autoplay=False, # Allows for manual control
-            stack_size=self.stack,
-            weights_file=source_weights_file
+            autoplay=False,
+            stack_size=self.stack
         )
 
-        self.env.add_player(training_agent)
+        env.unwrapped.add_player(training_agent)
         for i in range(2):
             random_agent = RandomPlayer(name=f'Random_{i+1}')
             random_agent.autoplay = True
-            self.env.add_player(random_agent)
+            env.unwrapped.add_player(random_agent)
 
-        # -------------------------------------------------
-        # 3. Training Loop
-        # -------------------------------------------------
-        episode_rewards = []
-        wins = []
-        agent_seat = 0
-        hands_played = 0
-        target_hands = 100
-
-        print("Training started...")
-
-        while hands_played < target_hands:
-
-            players_alive = sum(1 for p in self.env.players if p.stack > 0)
-            if players_alive < 2:
-                for p in self.env.players:
-                    p.stack = self.stack
-                continue
-
-            obs, info = self.env.reset()
-
-            if self.env.done:
-                break
-            
-            agent_start_stack = self.env.players[agent_seat].stack
-            hand_complete = False
-
-            while not hand_complete and not self.env.done:
-                if self.env.current_player is None:
-                    hand_complete = True
-                    break
-
-                current_seat = self.env.current_player.seat
-                current_obs = self.env.observation
-                current_info = self.env.info
-                legal_moves = self.env.legal_moves
-
-                if not legal_moves:
-                    hand_complete = True
-                    break
-
-                if current_seat == agent_seat:
-                    pre_investment = self.env.player_pots[agent_seat]
-
-                    action = training_agent.action(legal_moves, current_obs, current_info)
-                    next_obs, env_reward, done, truncated, next_info = self.env.step(action)
-
-                    post_pot = self.env.community_pot + self.env.current_round_pot
-                    equity = next_info['player_data'].get('equity_to_river_alive', 0.0)
-                    additional_investment = self.env.player_pots[agent_seat] - pre_investment
-
-                    if action == Action.FOLD:
-                        shaped_reward = env_reward - pre_investment
-                    else:
-                        # Expected value + immediate reward
-                        shaped_reward = env_reward + equity * post_pot - (1 - equity) * additional_investment
-
-                    training_agent.update(
-                        current_obs, current_info, action, shaped_reward,
-                        next_obs, next_info, done
-                    )
-                    
-                    if done or truncated or self.env.done:
-                        hand_complete = True
-                else:
-                    _, _, done, truncated, next_info = self.env.step(None)
-                    if done or truncated or self.env.done:
-                        hand_complete = True
-
-            print("--------------------------------Made it out of loop-------------------------------")
-
-            if self.env.done:
-                hand_complete = True
-            actual_hand_reward = self.env.players[agent_seat].stack - agent_start_stack
-            episode_rewards.append(actual_hand_reward)
-
-            if self.env.winner_ix is not None:
-                wins.append(1 if self.env.winner_ix == agent_seat else 0)
-            else:
-                wins.append(0)
-
-            training_agent.epsilon = max(epsilon_end, training_agent.epsilon * epsilon_decay)
-
-        hands_played += 1
-        self.log.info(f"Total hands played: {hands_played}")
-
-        # Save and finish
-        training_agent.save_weights(dest_weights_file)
-        print(f"FINAL WEIGHTS: {dest_weights_file}")
-        print(f"Training complete. Played {hands_played} hands.")
-
-        if self.funds_plot and len(episode_rewards) > 10:
-            import matplotlib.pyplot as plt
-            window = min(max(10, len(episode_rewards) // 10), 100)
-            r_smooth = pd.Series(episode_rewards).rolling(window).mean()
-            w_smooth = pd.Series(wins).rolling(window).mean() * 100
-
-            plt.figure(figsize=(12,8))
-            plt.subplot(2,1,1)
-            plt.plot(r_smooth)
-            plt.title(f'Average Reward ({window}-hand window)')
-            plt.ylabel('Reward')
-            plt.grid()
-
-            plt.subplot(2,1,2)
-            plt.plot(w_smooth)
-            plt.axhline(33.33, color='r', ls='--', label='Random (33%)')
-            plt.title('Win Rate %')
-            plt.ylabel('Win %')
-            plt.xlabel('Hand Number')
-            plt.legend()
-            plt.tight_layout()
-            plt.savefig('poker_final_curves.png')
-            plt.show()
-
-
-    def my_agent_evaluation(self):
-        from agents.agent_my_agent import Player as MyAgent
-        from agents.agent_random import Player as RandomPlayer
-        from agents.agent_consider_equity import Player as EquityPlayer
-        from gym_env.env import HoldemTable
-
-        print("="*60)
-        print("EVALUATION MODE - Testing Trained Agent")
-        print("="*60)
-
-        # -------------------------------------------------
-        # 1. Config + env
-        # -------------------------------------------------
-        # Environment
-        env_args = {
-            'initial_stacks': self.stack,
-            'small_blind': 10,
-            'big_blind': 20,
-            'render': self.render,
-            'funds_plot': self.funds_plot,
-            'use_cpp_montecarlo': self.use_cpp_montecarlo,
-            'calculate_equity': True  # MyAgent needs equity to extract features
-        }
-        self.env = HoldemTable(**env_args)
-
-        # -------------------------------------------------
-        # 2. Add agents
-        # -------------------------------------------------
-        training_agent = MyAgent(
-            epsilon=0.0, alpha=0.0, gamma=0.99,
-            name="Trained", stack_size=self.stack,
-            weights_file="poker_weights_final.npy"
-        )
-        self.env.add_player(training_agent)                                 # seat 0
-        self.env.add_player(EquityPlayer(name='Tight',  min_call_equity=.6, min_bet_equity=.7))
-        self.env.add_player(EquityPlayer(name='Loose',  min_call_equity=.3, min_bet_equity=.4))
-        for i in range(3):
-            self.env.add_player(RandomPlayer(name=f'Rand_{i+1}'))
-
-        # -------------------------------------------------
-        # 3. Evaluation loop
-        # -------------------------------------------------
-        eval_episodes = max(self.num_episodes, 1000)
-        wins, rewards = [], []
-
-        print(f"Running {eval_episodes} evaluation episodes...\n")
-
-        for ep in range(eval_episodes):
-            obs_array, info = self.env.reset()
-            episode_reward = 0
+        for ep in range(self.num_episodes):
+            obs, info = env.reset()
+            print("-------------------------- after reset ---------------------------------------")
             done = False
+            total_reward = 0
 
             while not done:
-                seat = self.env.current_player.seat
-                legal = self.env._get_legal_moves()
-            
-                if seat == 0:
-                    # 1. Cache the current state
-                    current_obs = obs_array
-                    
-                    # 2. Get action
-                    action = training_agent.action(legal, current_obs, info)
-                    
-                    # 3. Take step (and get next_info)
-                    next_obs, reward, terminated, truncated, next_info = self.env.step(action) # Don't discard info with '_'
-                    
-                    # 4. Call update with all arguments
-                    training_agent.update(current_obs, action, reward, next_obs, terminated) 
-                    
-                    episode_reward += reward
-                else:
-                    # ... (opponent logic)
-                    opp = self.env.players[seat]
-                    opp_action = opp.agent_obj.action(legal, current_obs, info)
-                    next_obs, reward, terminated, truncated, next_info = self.env.step(opp_action) # Update next_info
-            
+                legal_actions = info.get("legal_actions", [])
+                action = training_agent.action(legal_actions, obs, info)
+                next_obs, reward, terminated, truncated, next_info = env.step(action)
                 done = terminated or truncated
-                obs_array = next_obs
-                info = next_info # Pass the new info dict to the next loop iteration
 
-            wins.append(1 if self.env.winner_ix == 0 else 0)
-            rewards.append(episode_reward)
+                training_agent.update(obs, info, action, reward, next_obs, next_info, terminated)
 
-            if (ep + 1) % 100 == 0:
-                print(f"Eval {ep+1}/{eval_episodes} – Win% {np.mean(wins)*100:.1f}")
+                obs, info = next_obs, next_info
+                total_reward += reward
 
-        # -------------------------------------------------
-        # 4. Results
-        # -------------------------------------------------
-        print("\n" + "="*60)
-        print("EVALUATION RESULTS")
-        print("="*60)
-        print(f"Win rate: {np.mean(wins)*100:.2f}% (random: 16.67%)")
-        print(f"Avg reward: {np.mean(rewards):.2f}")
-        if np.mean(wins) > 1/6:
-            print("Agent BEATS random!")
-        else:
-            print("Agent needs more training.")
+            print(f"[Episode {ep+1}] Total reward: {total_reward:.2f}")
+
+        training_agent.save_weights(dest_weights_file)
+        print("Training complete ✅")
+
 
 
 if __name__ == '__main__':

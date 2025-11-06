@@ -76,6 +76,7 @@ class Player:
     # =====================================================================
 
     def action(self, legal_actions: List[Action], observation: np.ndarray, info: Dict) -> Action:
+        print("--------------------------------Choosing action--------------------------------")
         if not legal_actions:
             return Action.FOLD
 
@@ -95,9 +96,9 @@ class Player:
     def update(self, obs: np.ndarray, info: dict, action: Action, reward: float, 
            next_obs: np.ndarray, next_info: dict, terminated: bool):
         
+        print("--------------------------------Updating agent--------------------------------")
+
         self.steps += 1
-        if self.steps % self.target_update_freq == 0:
-            self.target_weights = self.weights.copy()
 
         # Use the info dict
         features = self.extract_features(obs, info) 
@@ -116,6 +117,7 @@ class Player:
         td_error = target - q_sa
         self.training_error.append(td_error)
         self.weights[:, a_idx] += self.alpha * td_error * features
+        print("--------------------------------Updated weights--------------------------------")
 
     # =====================================================================
     # FEATURES
