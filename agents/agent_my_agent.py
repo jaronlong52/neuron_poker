@@ -31,13 +31,13 @@ class Player:
         alpha: float = 0.005,
         gamma: float = 0.95,
         name: str = "MyAgent",
+        autoplay: bool = False,
         stack_size: int = None,
-        weights_file: str = None,
-        target_update_freq: int = 1000
+        weights_file: str = None
     ):
         # Required by environment
         self.name = name
-
+        self.autoplay = autoplay
         self.initial_stack = stack_size
 
         # Hyperparameters
@@ -45,7 +45,6 @@ class Player:
         self.alpha = alpha
         self.gamma = gamma
         self.training_error = []
-        self.target_update_freq = target_update_freq
         self.steps = 0
 
         self.last_exploiting = False

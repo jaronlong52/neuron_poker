@@ -269,7 +269,7 @@ class SelfPlay:
         from agents.agent_my_agent import Player as MyAgent
         from agents.agent_random import Player as RandomPlayer
         from gym_env.env import HoldemTable
-        from gym_env.cycle import PlayerCycle
+        from gym_env.enums import Action
 
         print("="*60)
         print("FINAL MANUAL TRAINING - Stable Q-Learning Poker Agent")
@@ -308,6 +308,7 @@ class SelfPlay:
             alpha=alpha,
             gamma=gamma,
             name="QAgent",
+            autoplay=False, # Allows for manual control
             stack_size=self.stack,
             weights_file=source_weights_file
         )
@@ -324,96 +325,90 @@ class SelfPlay:
         episode_rewards = []
         wins = []
         agent_seat = 0
-        games_played = 0
         hands_played = 0
+        target_hands = 100
 
         print("Training started...")
 
-        while games_played < num_games_to_play:
-            self.log.info(f"--- STARTING GAME {games_played + 1}/{num_games_to_play} ---")
+        while hands_played < target_hands:
 
-            # Reset stacks for new game
-            for player in self.env.players:
-                player.stack = self.stack
+            players_alive = sum(1 for p in self.env.players if p.stack > 0)
+            if players_alive < 2:
+                for p in self.env.players:
+                    p.stack = self.stack
+                continue
 
-            # Reinitialize player cycle
-            max_steps_after_raiser = (self.env.max_raises_per_player_round - 1) * len(self.env.players) - 1
-            self.env.player_cycle = PlayerCycle(
-                self.env.players,
-                dealer_idx=-1,
-                max_steps_after_raiser=max_steps_after_raiser,
-                max_steps_after_big_blind=len(self.env.players),
-                max_raises_per_player_round=self.env.max_raises_per_player_round
-            )
-            self.env.done = False
+            obs, info = self.env.reset()
 
-            # Play hands until someone goes bust
-            while not self.env.done:
-                # Check if we can still play
-                players_alive = sum(1 for p in self.env.players if p.stack > 0)
-                if players_alive < 2:
+            if self.env.done:
+                break
+            
+            agent_start_stack = self.env.players[agent_seat].stack
+            hand_complete = False
+
+            while not hand_complete and not self.env.done:
+                if self.env.current_player is None:
+                    hand_complete = True
                     break
 
-                obs_array, info = self.env.reset()
+                current_seat = self.env.current_player.seat
+                current_obs = self.env.observation
+                current_info = self.env.info
+                legal_moves = self.env.legal_moves
 
-                if self.env.done:
+                if not legal_moves:
+                    hand_complete = True
                     break
 
-                hand_reward = 0
-                hand_complete = False
+                if current_seat == agent_seat:
+                    pre_investment = self.env.player_pots[agent_seat]
 
-                while not hand_complete and not self.env.done:
-                    if self.env.current_player is None:
-                        hand_complete = True
-                        break
+                    action = training_agent.action(legal_moves, current_obs, current_info)
+                    next_obs, env_reward, done, truncated, next_info = self.env.step(action)
 
-                    current_seat = self.env.current_player.seat
-                    current_obs = self.env.observation
-                    current_info = self.env.info
-                    legal_moves = self.env.legal_moves
+                    post_pot = self.env.community_pot + self.env.current_round_pot
+                    equity = next_info['player_data'].get('equity_to_river_alive', 0.0)
+                    additional_investment = self.env.player_pots[agent_seat] - pre_investment
 
-                    if not legal_moves:
-                        hand_complete = True
-                        break
-
-                    if current_seat == agent_seat:
-                        action = training_agent.action(legal_moves, current_obs, current_info)
-                        next_obs, reward, done, truncated, next_info = self.env.step(action)
-
-                        training_agent.update(
-                            current_obs, current_info, action, reward,
-                            next_obs, next_info, done
-                        )
-
-                        hand_reward += reward
-
-                        if done or truncated or self.env.done:
-                            hand_complete = True
+                    if action == Action.FOLD:
+                        shaped_reward = env_reward - pre_investment
                     else:
-                        next_obs, reward, done, truncated, next_info = self.env.step(None)
+                        # Expected value + immediate reward
+                        shaped_reward = env_reward + equity * post_pot - (1 - equity) * additional_investment
 
-                        if done or truncated or self.env.done:
-                            hand_complete = True
-
-                # Record hand stats
-                hands_played += 1
-                episode_rewards.append(hand_reward)
-
-                if self.env.winner_ix is not None:
-                    wins.append(1 if self.env.winner_ix == agent_seat else 0)
+                    training_agent.update(
+                        current_obs, current_info, action, shaped_reward,
+                        next_obs, next_info, done
+                    )
+                    
+                    if done or truncated or self.env.done:
+                        hand_complete = True
                 else:
-                    wins.append(0)
+                    _, _, done, truncated, next_info = self.env.step(None)
+                    if done or truncated or self.env.done:
+                        hand_complete = True
 
-                training_agent.epsilon = max(epsilon_end, training_agent.epsilon * epsilon_decay)
+            print("--------------------------------Made it out of loop-------------------------------")
 
-            games_played += 1
-            self.log.info(f"--- GAME {games_played}/{num_games_to_play} COMPLETE ---")
-            self.log.info(f"Total hands played: {hands_played}")
+            if self.env.done:
+                hand_complete = True
+            actual_hand_reward = self.env.players[agent_seat].stack - agent_start_stack
+            episode_rewards.append(actual_hand_reward)
+
+            if self.env.winner_ix is not None:
+                wins.append(1 if self.env.winner_ix == agent_seat else 0)
+            else:
+                wins.append(0)
+
+            training_agent.epsilon = max(epsilon_end, training_agent.epsilon * epsilon_decay)
+
+        hands_played += 1
+        self.log.info(f"Total hands played: {hands_played}")
 
         # Save and finish
         training_agent.save_weights(dest_weights_file)
         print(f"FINAL WEIGHTS: {dest_weights_file}")
-        print(f"Training complete. Played {games_played} games across {hands_played} hands.")
+        print(f"Training complete. Played {hands_played} hands.")
 
         if self.funds_plot and len(episode_rewards) > 10:
             import matplotlib.pyplot as plt
