@@ -31,13 +31,11 @@ class Player:
         alpha: float = 0.005,
         gamma: float = 0.95,
         name: str = "MyAgent",
-        autoplay: bool = False,
         stack_size: int = None,
         weights_file: str = None
     ):
         # Required by environment
         self.name = name
-        self.autoplay = autoplay
         self.initial_stack = stack_size
 
         # Hyperparameters
@@ -77,6 +75,7 @@ class Player:
 
     def action(self, legal_actions: List[Action], observation: np.ndarray, info: Dict) -> Action:
         print("--------------------------------Choosing action--------------------------------")
+        print("Legal actions:", legal_actions)
         if not legal_actions:
             return Action.FOLD
 

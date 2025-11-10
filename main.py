@@ -293,7 +293,6 @@ class CustomAgent:
             alpha=alpha,
             gamma=gamma,
             name="QAgent",
-            autoplay=False,
             stack_size=self.stack
         )
 
@@ -305,22 +304,36 @@ class CustomAgent:
 
         for ep in range(self.num_episodes):
             obs, info = env.reset()
-            print("-------------------------- after reset ---------------------------------------")
+            print("After reset")
             done = False
             total_reward = 0
 
             while not done:
-                legal_actions = info.get("legal_actions", [])
-                action = training_agent.action(legal_actions, obs, info)
-                next_obs, reward, terminated, truncated, next_info = env.step(action)
-                done = terminated or truncated
+                # CRITICAL: Manually refresh environment state
+                env.unwrapped._get_environment()
 
-                training_agent.update(obs, info, action, reward, next_obs, next_info, terminated)
+                # Now legal_moves is set!
+                legal_moves = env.unwrapped.legal_moves
+
+                print(f"Legal moves: {legal_moves}")  # Debug: will print now
+
+                current_agent = env.unwrapped.current_player.agent_obj
+
+                if current_agent == training_agent:
+                    action = training_agent.action(legal_moves, obs, info)
+                    # Update your agent
+                    next_obs, reward, terminated, truncated, next_info = env.step(action)
+                    training_agent.update(obs, info, action, reward, next_obs, next_info, terminated)
+                    total_reward += reward
+                else:
+                    # Other agents act normally
+                    action = current_agent.action(legal_moves, obs, info)
+                    next_obs, reward, terminated, truncated, next_info = env.step(action)
 
                 obs, info = next_obs, next_info
-                total_reward += reward
+                done = terminated or truncated
 
-            print(f"[Episode {ep+1}] Total reward: {total_reward:.2f}")
+            print(f"Episode {ep+1} reward: {total_reward}")
 
         training_agent.save_weights(dest_weights_file)
         print("Training complete ✅")
