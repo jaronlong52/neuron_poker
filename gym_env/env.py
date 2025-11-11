@@ -268,7 +268,6 @@ class HoldemTable(Env):
         arr3 = np.array([list(flatten(sd.__dict__.values())) for sd in self.stage_data]).flatten()
 
         self.array_everything = np.concatenate([arr1, arr2, arr3]).flatten()
-        print("Observation shape:", self.array_everything.shape)  # For debugging
 
         self.observation = self.array_everything
         self._get_legal_moves()
@@ -462,16 +461,51 @@ class HoldemTable(Env):
         self.done = True
         player_names = [f"{i} - {player.name}" for i, player in enumerate(self.players)]
         self.funds_history.columns = player_names
-        if self.funds_plot:
-            self.funds_history.reset_index(drop=True).plot()
-        log.info(self.funds_history)
-        plt.show()
+        # if self.funds_plot:
+        #     self.funds_history.reset_index(drop=True).plot()
+        # log.info(self.funds_history)
+        # plt.show()
 
+        # winner_in_episodes.append(self.winner_ix)
+        # league_table = pd.Series(winner_in_episodes).value_counts()
+        # best_player = league_table.index[0]
+        # log.info(league_table)
+        # log.info(f"Best Player: {best_player}")
+        # In _game_over() — DO NOT show plot here
         winner_in_episodes.append(self.winner_ix)
-        league_table = pd.Series(winner_in_episodes).value_counts()
-        best_player = league_table.index[0]
+        
+        # DO NOT call plt.show() or plot here
+        if self.funds_plot:
+            funds_dict = {i: player.stack for i, player in enumerate(self.players)}
+            self.funds_history = pd.concat([self.funds_history, pd.DataFrame(funds_dict, index=[0])], ignore_index=True)
+
+    def finalize_results(self):
+        """Call this after all episodes are done to show final win summary."""
+        if not winner_in_episodes:
+            log.warning("No episodes played yet.")
+            return
+
+        league_table = pd.Series(winner_in_episodes).value_counts().sort_index()
+        player_names = {i: self.players[i].name for i in range(len(self.players))}
+
+        # Map indices to names
+        league_table.index = league_table.index.map(player_names.get)
+
+        log.info("=== FINAL LEADERBOARD ===")
         log.info(league_table)
-        log.info(f"Best Player: {best_player}")
+
+        # === Create Final Visualization ===
+        plt.figure(figsize=(10, 6))
+    
+        # Bar chart
+        league_table.plot(kind='bar', color='skyblue', edgecolor='black')
+        plt.title("Number of Episodes Won per Player")
+        plt.ylabel("Wins")
+        plt.xlabel("Player")
+        plt.xticks(rotation=45)
+
+        plt.tight_layout()
+        plt.show()
 
     def _initiate_round(self):
         """A new round (flop, turn, river) is initiated"""
