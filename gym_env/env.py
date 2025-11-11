@@ -426,6 +426,12 @@ class HoldemTable(Env):
 
         for player in self.players:
             player.cards = []
+            player.num_raises_in_street = {
+                Stage.PREFLOP: 0,
+                Stage.FLOP: 0,
+                Stage.TURN: 0,
+                Stage.RIVER: 0
+            }
 
         self._next_dealer()
 
@@ -645,14 +651,17 @@ class HoldemTable(Env):
     def _get_legal_moves(self):
         """Determine what moves are allowed in the current state"""
         self.legal_moves = []
+
+        if self.stage in [Stage.SHOWDOWN, Stage.END_HIDDEN]:
+            return
+
         if self.player_pots[self.current_player.seat] == max(self.player_pots):
             self.legal_moves.append(Action.CHECK)
         else:
             self.legal_moves.append(Action.CALL)
             self.legal_moves.append(Action.FOLD)
 
-        if self.stage != Stage.SHOWDOWN and \
-            self.current_player.num_raises_in_street.get(self.stage, 0) < self.max_raises_per_player_round:
+        if self.current_player.num_raises_in_street[self.stage] < self.max_raises_per_player_round:
             if self.current_player.stack >= 3 * self.big_blind - self.player_pots[self.current_player.seat]:
                 self.legal_moves.append(Action.RAISE_3BB)
 
@@ -669,7 +678,7 @@ class HoldemTable(Env):
                 self.legal_moves.append(Action.ALL_IN)
 
         log.debug(f"Community+current round pot pot: {self.community_pot + self.current_round_pot}")
-
+    
     def _close_round(self):
         """put player_pots into community pots"""
         self.community_pot += sum(self.player_pots)

@@ -98,14 +98,6 @@ class Player:
         # Use the info dict
         features = self.extract_features(obs, info) 
 
-        print("\n\n\n")
-        print(f"Binary features: {features}")
-        print(f"  Equity: strong={features[0]}, vstrong={features[1]}")
-        print(f"  Stack: ok={features[2]}, full={features[3]}")
-        print(f"  Stage: pre={features[4]}, flop={features[5]}, turn={features[6]}, river={features[7]}")
-        print(f"  Pots: c_med={features[8]}, c_large={features[9]}, r_sm={features[10]}, r_med={features[11]}, r_lg={features[12]}")
-        print("\n\n\n")
-
         q_values = np.dot(features, self.weights)
         a_idx = self.action_order.index(action)
         q_sa = q_values[a_idx]
