@@ -36,6 +36,8 @@ from gym_env.env import PlayerShell
 from tools.helper import get_config
 from tools.helper import init_logger
 
+import matplotlib.pyplot as plt
+
 
 # pylint: disable=import-outside-toplevel
 
@@ -302,6 +304,9 @@ class CustomAgent:
             random_agent.autoplay = True
             env.unwrapped.add_player(random_agent)
 
+        episode_rewards = []
+        episode_winners = []
+
         for ep in range(self.num_episodes):
             print("\n\n\n\n\n-----------------------------------------EPISODE {}-----------------------------------------".format(ep+1))
 
@@ -325,6 +330,8 @@ class CustomAgent:
 
                     action = training_agent.action(legal_moves, obs, info)
                     next_obs, reward, terminated, truncated, next_info = env.step(action)
+                    print("\nReward: ", reward)
+                    print("-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------")
                     training_agent.update(obs, info, action, reward, next_obs, next_info, terminated)
                     total_reward += reward
                 else:
@@ -333,12 +340,53 @@ class CustomAgent:
                 obs, info = next_obs, next_info
                 done = terminated or truncated
 
+                if done:
+                    print("-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------")
+                    print("winner_ix: ", info.get("winner_ix"))
+                    print("-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------")
+
+
+            episode_rewards.append(total_reward)
+            episode_winners.append(info.get("winner_ix"))
+
             print(f"------------------------------Episode {ep+1} reward: {total_reward}------------------------------")
 
         training_agent.save_weights(dest_weights_file)
         print("Training complete ✅")
-        env.unwrapped.finalize_results()
+        self.finalize_results(episode_rewards, episode_winners)
 
+
+    def finalize_results(self, training_rewards, episode_winners):
+        avg_reward = np.mean(training_rewards)
+        total_wins = sum(1 for winner in episode_winners if winner == 0)
+
+        # Count wins for each player index
+        unique_winners = np.unique(episode_winners)
+        win_counts = [episode_winners.count(i) for i in range(len(unique_winners))]
+        player_names = [f'Player {i}' if i != 0 else 'QAgent' for i in unique_winners]
+
+        print("\n\nTraining Summary")
+        print("================")
+        print(f"Average Reward per Episode: {avg_reward:.2f}")
+        print(f"Episode_wins: {episode_winners}")
+        print(f"Total Agent Wins: {total_wins} out of {self.num_episodes} episodes")
+
+        # === Simple Bar Graph ===
+        plt.figure(figsize=(6, 4))
+        bars = plt.bar(player_names, win_counts, color=['tab:blue' if name == 'QAgent' else 'lightgray' for name in player_names])
+        plt.title('Wins per Agent')
+        plt.ylabel('Number of Wins')
+        plt.xlabel('Agent')
+        plt.ylim(0, max(win_counts) * 1.2 if win_counts else 1)
+
+        # Add count labels on top of bars
+        for bar in bars:
+            height = bar.get_height()
+            plt.text(bar.get_x() + bar.get_width()/2.0, height + 0.1, f'{int(height)}', 
+                     ha='center', va='bottom', fontsize=10)
+
+        plt.tight_layout()
+        plt.show()
 
 
 if __name__ == '__main__':

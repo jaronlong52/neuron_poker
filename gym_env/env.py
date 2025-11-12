@@ -275,35 +275,48 @@ class HoldemTable(Env):
         self.info = {'player_data': self.player_data.__dict__,
                      'community_data': self.community_data.__dict__,
                      'stage_data': [stage.__dict__ for stage in self.stage_data],
-                     'legal_moves': self.legal_moves}
+                     'legal_moves': self.legal_moves,
+                     'winner_ix': self.winner_ix}
 
         if self.render_switch:
             self.render()
 
     def _calculate_reward(self, last_action):
         """
-        Preliminiary implementation of reward function
+        Simple reward function (called after every step).
 
-        - Currently missing potential additional winnings from future contributions
+        1. **During the hand** - reward = change in the agent's stack since the previous step.
+           (This captures raises, calls, and the cost of folding.)
+        2. **When the hand ends** - give a large final reward based on who won:
+              + (total chips in play)   if the agent won
+              - (total chips in play)   if the agent lost
+           This keeps the intermediate rewards small and the terminal one decisive.
         """
-        # if last_action == Action.FOLD:
-        #     self.reward = -(
-        #             self.community_pot + self.current_round_pot)
-        # else:
-        #     self.reward = self.player_data.equity_to_river_alive * (self.community_pot + self.current_round_pot) - \
-        #                   (1 - self.player_data.equity_to_river_alive) * self.player_pots[self.current_player.seat]
-        _ = last_action
+        # ------------------------------------------------------------------
+        # 1. Terminal reward (hand is over)
+        # ------------------------------------------------------------------
         if self.done:
-            won = 1 if not self._agent_is_autoplay(idx=self.winner_ix) else -1
-            self.reward = self.initial_stacks * len(self.players) * won
-            log.debug(f"Keras-rl agent has reward {self.reward}")
+            total_chips = self.initial_stacks * len(self.players)      # e.g. 3×500 = 1500
+            if self.winner_ix == self.acting_agent:                    # our agent won
+                self.reward = +total_chips
+            else:
+                self.reward = -total_chips
+            log.debug(f"Hand finished - agent reward: {self.reward}")
+            return
 
-        elif len(self.funds_history) > 1:
-            self.reward = self.funds_history.iloc[-1, self.acting_agent] - self.funds_history.iloc[
-                -2, self.acting_agent]
-
+        # ------------------------------------------------------------------
+        # 2. Intermediate reward (stack change since last step)
+        # ------------------------------------------------------------------
+        # `self.funds_history` is a DataFrame where each row = one step,
+        # columns = player seats, values = current stack.
+        if len(self.funds_history) >= 2:
+            stack_now  = self.funds_history.iloc[-1, self.acting_agent]
+            stack_prev = self.funds_history.iloc[-2, self.acting_agent]
+            self.reward = stack_now - stack_prev
         else:
-            pass
+            # First step of the hand → no change yet
+            self.reward = 0.0
+
 
     def _process_decision(self, action):  # pylint: disable=too-many-statements
         """Process the decisions that have been made by an agent."""
@@ -479,39 +492,13 @@ class HoldemTable(Env):
         # log.info(f"Best Player: {best_player}")
         # In _game_over() — DO NOT show plot here
         winner_in_episodes.append(self.winner_ix)
+
+        self._get_environment()
         
         # DO NOT call plt.show() or plot here
         if self.funds_plot:
             funds_dict = {i: player.stack for i, player in enumerate(self.players)}
             self.funds_history = pd.concat([self.funds_history, pd.DataFrame(funds_dict, index=[0])], ignore_index=True)
-
-    def finalize_results(self):
-        """Call this after all episodes are done to show final win summary."""
-        if not winner_in_episodes:
-            log.warning("No episodes played yet.")
-            return
-
-        league_table = pd.Series(winner_in_episodes).value_counts().sort_index()
-        player_names = {i: self.players[i].name for i in range(len(self.players))}
-
-        # Map indices to names
-        league_table.index = league_table.index.map(player_names.get)
-
-        log.info("=== FINAL LEADERBOARD ===")
-        log.info(league_table)
-
-        # === Create Final Visualization ===
-        plt.figure(figsize=(10, 6))
-    
-        # Bar chart
-        league_table.plot(kind='bar', color='skyblue', edgecolor='black')
-        plt.title("Number of Episodes Won per Player")
-        plt.ylabel("Wins")
-        plt.xlabel("Player")
-        plt.xticks(rotation=45)
-
-        plt.tight_layout()
-        plt.show()
 
     def _initiate_round(self):
         """A new round (flop, turn, river) is initiated"""
