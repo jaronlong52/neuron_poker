@@ -136,6 +136,7 @@ class HoldemTable(Env):
         )
 
     def reset(self, seed=None, options=None):
+        print("Func reset called")
         """Reset after game over."""
         # Set random seed for reproducibility
         if seed is not None:
@@ -168,6 +169,7 @@ class HoldemTable(Env):
         return self.array_everything, self.info
 
     def step(self, action):
+        print("Func step called")
         """
         Next player makes a move and a new environment is observed.
         Args:
@@ -201,17 +203,20 @@ class HoldemTable(Env):
         return self.array_everything, self.reward, self.done, False, self.info
 
     def _execute_step(self, action):
+        print("Func _execute_step called")
         self._process_decision(action)
 
         self._next_player()
 
         if self.stage in [Stage.END_HIDDEN, Stage.SHOWDOWN]:
             self._end_hand()
+            # could update agent after winning hand
             self._start_new_hand()
 
         self._get_environment()
 
     def _illegal_move(self, action):
+        print("Func _illegal_move called")
         log.warning(f"{action} is an Illegal move, try again. Currently allowed: {self.legal_moves}")
         if self.raise_illegal_moves:
             raise ValueError(f"{action} is an Illegal move, try again. Currently allowed: {self.legal_moves}")
@@ -223,6 +228,7 @@ class HoldemTable(Env):
         return hasattr(self.players[idx].agent_obj, 'autoplay')
 
     def _get_environment(self):
+        print("Func _get_environment called")
         """Observe the environment"""
         if not self.done:
             self._get_legal_moves()
@@ -282,6 +288,7 @@ class HoldemTable(Env):
             self.render()
 
     def _calculate_reward(self, last_action):
+        print("Func _calculate_reward called")
         """
         Simple reward function (called after every step).
 
@@ -319,6 +326,7 @@ class HoldemTable(Env):
 
 
     def _process_decision(self, action):  # pylint: disable=too-many-statements
+        print("Func _process_decision called")
         """Process the decisions that have been made by an agent."""
         if action not in [Action.SMALL_BLIND, Action.BIG_BLIND]:
             assert action in set(self.legal_moves), "Illegal decision"
@@ -411,6 +419,7 @@ class HoldemTable(Env):
             f"player pot: {self.player_pots[self.current_player.seat]}")
 
     def _start_new_hand(self):
+        print("Func _start_new_hand called")
         """Deal new cards to players and reset table states."""
         self._save_funds_history()
 
@@ -457,6 +466,7 @@ class HoldemTable(Env):
         self.funds_history = pd.concat([self.funds_history, pd.DataFrame(funds_dict, index=[0])])
 
     def _check_game_over(self):
+        print("Func _check_game_over called")
         """Check if only one player has money left"""
         player_alive = []
         self.player_cycle.new_hand_reset()
@@ -475,6 +485,7 @@ class HoldemTable(Env):
         return False
 
     def _game_over(self):
+        print("Func _game_over called")
         """End of an episode."""
         log.info("Game over.")
         self.done = True
@@ -501,6 +512,7 @@ class HoldemTable(Env):
             self.funds_history = pd.concat([self.funds_history, pd.DataFrame(funds_dict, index=[0])], ignore_index=True)
 
     def _initiate_round(self):
+        print("Func _initiate_round called")
         """A new round (flop, turn, river) is initiated"""
         self.last_caller = None
         self.last_raiser = None
@@ -550,6 +562,7 @@ class HoldemTable(Env):
         self.player_pots = [0] * len(self.players)
 
     def _end_round(self):
+        print("Func _end_round called")
         """End of preflop, flop, turn or river"""
         self._close_round()
         if self.stage == Stage.PREFLOP:
@@ -572,16 +585,19 @@ class HoldemTable(Env):
         self._clean_up_pots()
 
     def _clean_up_pots(self):
+        print("Func _clean_up_pots called")
         self.community_pot += self.current_round_pot
         self.current_round_pot = 0
         self.player_pots = [0] * len(self.players)
 
     def _end_hand(self):
+        print("Func _end_hand called")
         self._clean_up_pots()
         self.winner_ix = self._get_winner()
         self._award_winner(self.winner_ix)
 
     def _get_winner(self):
+        print("Func _get_winner called")
         """Determine which player has won the hand"""
         potential_winners = self.player_cycle.get_potential_winners()
 
@@ -598,9 +614,14 @@ class HoldemTable(Env):
                                                                        self.table_cards)
             winner_ix = potential_winner_idx[remaining_player_winner_ix]
         log.info(f"Player {winner_ix} won: {winning_card_type}")
+
+        if (winner_ix == 0):
+            print("!!My Agent Won")
+
         return winner_ix
 
     def _award_winner(self, winner_ix):
+        print("Func _award_winner called")
         """Hand the pot to the winner and handle side pots"""
         max_win_per_player_for_winner = self.player_max_win[winner_ix]
         total_winnings = sum(np.minimum(max_win_per_player_for_winner, self.player_max_win))
@@ -617,6 +638,7 @@ class HoldemTable(Env):
         self.dealer_pos = self.player_cycle.next_dealer().seat
 
     def _next_player(self):
+        print("Func _next_player called")
         """Move to the next player"""
         self.current_player = self.player_cycle.next_player()
         if not self.current_player:
@@ -636,6 +658,7 @@ class HoldemTable(Env):
             return
 
     def _get_legal_moves(self):
+        print("Func _get_legal_moves called")
         """Determine what moves are allowed in the current state"""
         self.legal_moves = []
 
@@ -667,6 +690,7 @@ class HoldemTable(Env):
         log.debug(f"Community+current round pot pot: {self.community_pot + self.current_round_pot}")
     
     def _close_round(self):
+        print("Func _close_round called")
         """put player_pots into community pots"""
         self.community_pot += sum(self.player_pots)
         self.player_pots = [0] * len(self.players)

@@ -108,6 +108,7 @@ class Player:
             # Use the next_info dict
             next_features = self.extract_features(next_obs, next_info)
             next_q = np.dot(next_features, self.target_weights)
+            print("!!Reward used in update: ", reward)
             target = reward + self.gamma * np.max(next_q)
 
         td_error = target - q_sa
