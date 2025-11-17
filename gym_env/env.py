@@ -611,6 +611,10 @@ class HoldemTable(Env):
     def _get_legal_moves(self):
         """Determine what moves are allowed in the current state"""
         self.legal_moves = []
+
+        if self.stage in [Stage.SHOWDOWN, Stage.END_HIDDEN]:
+            return
+
         if self.player_pots[self.current_player.seat] == max(self.player_pots):
             self.legal_moves.append(Action.CHECK)
         else:

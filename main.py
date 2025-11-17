@@ -264,25 +264,22 @@ class SelfPlay:
 
         self.stack = 10 # hard coded for simplicity
 
+        training_agent = MyAgent(
+            epsilon=1.0,
+            alpha=0.005,
+            gamma=0.95,
+            name="QAgent",
+            stack_size=self.stack
+        )
+
         self.env = gym.make(env_name, initial_stacks=self.stack, render=self.render)
 
         # Add players via unwrapped
-        self.env.unwrapped.add_player(MyAgent(name='MyAgent'))
-        for i in range(5):
+        self.env.unwrapped.add_player(training_agent)
+        for i in range(2):
             self.env.unwrapped.add_player(RandomPlayer(name=f'Random_{i+1}'))
 
-        # something is broken in here
-        for _ in range(self.num_episodes):
-            self.env.reset()
-            done = False
-            while not done:
-                _, _, done, _, _ = self.env.step(None)
-            self.winner_in_episodes.append(self.env.unwrapped.winner_ix)
-
-        league_table = pd.Series(self.winner_in_episodes).value_counts()
-        print("League Table")
-        print("============")
-        print(league_table)
+        self.env.reset()
 
 
 if __name__ == '__main__':
