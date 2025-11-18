@@ -264,6 +264,8 @@ class SelfPlay:
 
         self.stack = 10 # hard coded for simplicity
 
+        num_episodes = 5
+
         training_agent = MyAgent(
             epsilon=1.0,
             alpha=0.005,
@@ -279,7 +281,12 @@ class SelfPlay:
         for i in range(2):
             self.env.unwrapped.add_player(RandomPlayer(name=f'Random_{i+1}'))
 
-        self.env.reset()
+        for _ in range(num_episodes):
+            self.env.reset()
+
+        # After game finishes, show training results
+        training_agent.print_training_summary()
+        training_agent.plot_training_progress()
 
 
 if __name__ == '__main__':

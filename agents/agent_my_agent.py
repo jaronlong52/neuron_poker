@@ -41,6 +41,11 @@ class Player:
         self.last_update_hand = -1
         self.current_hand = 0
 
+        # Training metrics
+        self.hand_rewards = []  # Track reward per hand
+        self.avg_td_errors = []  # Track average TD error per hand
+        self.cumulative_stack = []  # Track stack size over time
+
         # Action mapping
         self.action_order = [
             Action.FOLD,
@@ -136,6 +141,10 @@ class Player:
         hand_end_stack = funds_history.iloc[-1, my_position]
         final_hand_reward = hand_end_stack - hand_start_stack
 
+        self.hand_rewards.append(final_hand_reward)
+        self.cumulative_stack.append(hand_end_stack)
+        td_errors_this_hand = []
+
         print(f"Final hand result: {hand_start_stack:.1f} → {hand_end_stack:.1f} (Δ {final_hand_reward:+.2f})")
 
         # Loop through each action in the hand
@@ -158,7 +167,8 @@ class Player:
 
             print(f"Update [{i}]: {action:<15} | Bet: {immediate_reward:>6.2f} | Future: {future_reward:>6.2f} | Total R: {total_reward:>6.2f}")
 
-            self._q_learning_update(info, action, total_reward, legal_actions, next_info)
+            td_error = self._q_learning_update(info, action, total_reward, legal_actions, next_info)
+            td_errors_this_hand.append(abs(td_error))
 
 
     def _q_learning_update(self,
@@ -187,6 +197,8 @@ class Player:
 
         print(f"   → TD error: {td_error:6.3f} | Q({action}) was {q_sa:6.3f} → {q_sa + self.alpha * td_error * np.linalg.norm(features):6.3f}")
         
+        return td_error
+
     # =====================================================================
     # FEATURES
     # =====================================================================
@@ -266,6 +278,92 @@ class Player:
             print(f"[Agent] Loaded weights: {filename}")
         else:
             raise FileNotFoundError(filename)
+
+    def plot_training_progress(self):
+        """Plot training metrics to visualize learning"""
+        import matplotlib.pyplot as plt
+        
+        if len(self.hand_rewards) == 0:
+            print("No training data to plot yet.")
+            return
+        
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        
+        # 1. Hand rewards over time
+        axes[0, 0].plot(self.hand_rewards, alpha=0.3, label='Per-hand reward')
+        if len(self.hand_rewards) >= 10:
+            window = min(10, len(self.hand_rewards) // 5)
+            rolling_avg = pd.Series(self.hand_rewards).rolling(window=window).mean()
+            axes[0, 0].plot(rolling_avg, label=f'{window}-hand moving average', linewidth=2)
+        axes[0, 0].axhline(y=0, color='r', linestyle='--', alpha=0.5)
+        axes[0, 0].set_xlabel('Hand Number')
+        axes[0, 0].set_ylabel('Reward')
+        axes[0, 0].set_title('Rewards per Hand')
+        axes[0, 0].legend()
+        axes[0, 0].grid(True, alpha=0.3)
+        
+        # 2. Cumulative stack size
+        axes[0, 1].plot(self.cumulative_stack, linewidth=2)
+        axes[0, 1].axhline(y=self.initial_stack, color='r', linestyle='--', alpha=0.5, label='Starting stack')
+        axes[0, 1].set_xlabel('Hand Number')
+        axes[0, 1].set_ylabel('Stack Size')
+        axes[0, 1].set_title('Stack Size Over Time')
+        axes[0, 1].legend()
+        axes[0, 1].grid(True, alpha=0.3)
+        
+        # 3. Average TD errors
+        axes[1, 0].plot(self.avg_td_errors, alpha=0.6, label='Avg TD Error per hand')
+        if len(self.avg_td_errors) >= 10:
+            window = min(10, len(self.avg_td_errors) // 5)
+            rolling_avg_td = pd.Series(self.avg_td_errors).rolling(window=window).mean()
+            axes[1, 0].plot(rolling_avg_td, label=f'{window}-hand moving average', linewidth=2)
+        axes[1, 0].set_xlabel('Hand Number')
+        axes[1, 0].set_ylabel('Avg |TD Error|')
+        axes[1, 0].set_title('TD Error Over Time (Lower = More Stable)')
+        axes[1, 0].legend()
+        axes[1, 0].grid(True, alpha=0.3)
+        
+        # 4. Cumulative reward
+        cumulative_rewards = np.cumsum(self.hand_rewards)
+        axes[1, 1].plot(cumulative_rewards, linewidth=2)
+        axes[1, 1].axhline(y=0, color='r', linestyle='--', alpha=0.5)
+        axes[1, 1].set_xlabel('Hand Number')
+        axes[1, 1].set_ylabel('Cumulative Reward')
+        axes[1, 1].set_title('Cumulative Rewards Over Time')
+        axes[1, 1].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.savefig('training_progress.png', dpi=150, bbox_inches='tight')
+        print(f"\n[Agent] Training plot saved as 'training_progress.png'")
+        plt.show()
+
+    def print_training_summary(self):
+        """Print a summary of training statistics"""
+        if len(self.hand_rewards) == 0:
+            print("No training data yet.")
+            return
+        
+        print("\n" + "="*60)
+        print("TRAINING SUMMARY")
+        print("="*60)
+        print(f"Total hands played: {len(self.hand_rewards)}")
+        print(f"Final stack size: {self.cumulative_stack[-1]:.2f}")
+        print(f"Total profit/loss: {self.cumulative_stack[-1] - self.initial_stack:+.2f}")
+        print(f"\nAverage reward per hand: {np.mean(self.hand_rewards):.3f}")
+        print(f"Std dev of rewards: {np.std(self.hand_rewards):.3f}")
+        print(f"Win rate: {100 * np.sum(np.array(self.hand_rewards) > 0) / len(self.hand_rewards):.1f}%")
+        if len(self.avg_td_errors) > 0:
+            print(f"\nAverage TD error: {np.mean(self.avg_td_errors):.3f}")
+        else:
+            print(f"\nAverage TD error: Not enough data yet")
+        
+        # Recent performance (last 20%)
+        recent_count = max(1, len(self.hand_rewards) // 5)
+        recent_rewards = self.hand_rewards[-recent_count:]
+        print(f"\nRecent performance (last {recent_count} hands):")
+        print(f"  Average reward: {np.mean(recent_rewards):.3f}")
+        print(f"  Win rate: {100 * np.sum(np.array(recent_rewards) > 0) / len(recent_rewards):.1f}%")
+        print("="*60 + "\n")
 
     def __str__(self):
         return self.name
