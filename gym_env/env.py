@@ -184,9 +184,8 @@ class HoldemTable(Env):
                     self._illegal_move(action)
                 else:
                     self._execute_step(Action(action))
-                    if self.first_action_for_hand[self.acting_agent] or self.done:
-                        self.first_action_for_hand[self.acting_agent] = False
-                        self._calculate_reward(action)
+                    self.first_action_for_hand[self.acting_agent] = False
+                    self._calculate_reward(action)
         else:
             self._get_environment()
             if Action(action) not in self.legal_moves:

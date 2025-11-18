@@ -37,6 +37,10 @@ class Player:
         # state-action history
         self.history = []
 
+        # Track if we've updated for the current hand
+        self.last_update_hand = -1
+        self.current_hand = 0
+
         # Action mapping
         self.action_order = [
             Action.FOLD,
@@ -64,83 +68,130 @@ class Player:
 
     def action(self, legal_actions: List[Action], observation: np.ndarray, info: Dict, funds_history: pd.DataFrame) -> Action:
 
+        _ = observation  # not used
+
         stage = info["community_data"]["stage"]
-        if stage[0] and self.history is not None: # if preflop but not first hand, then the previous hand ended and the agent can be updated
-            self._update(observation, info, legal_actions, funds_history)
+        my_position = info["player_data"]["position"]
+        stage_data = info["stage_data"]
+
+        # Detect if we're at the start of a new hand by checking:
+        # 1. We're in preflop (stage[0] == True)
+        # 2. The funds_history has grown (new hand was recorded)
+        # 3. We haven't updated for this hand yet
+        is_new_hand = (
+            stage[0] and  # In preflop
+            len(funds_history) > self.current_hand and  # New hand recorded in funds_history
+            self.last_update_hand < self.current_hand and  # Haven't updated yet
+            len(self.history) > 0  # Have history to update from
+        )
+
+        # Update weights from previous hand when starting a new hand
+        if is_new_hand:
+            print(f"\n!! Call Update (Hand {self.current_hand} -> {len(funds_history)}) !!\n")
+            self._update(funds_history, my_position)
             self.history = [] # clear history for new hand
+            self.last_update_hand = self.current_hand
+
+        # Update current hand counter
+        if len(funds_history) > self.current_hand:
+            self.current_hand = len(funds_history)
 
         action = None
-
         if not legal_actions:
             action = Action.FOLD
-
-        if np.random.random() < self.epsilon:
+        elif np.random.random() < self.epsilon:
             action = np.random.choice(legal_actions)
         else:
-            action = self._choose_greedy(observation, legal_actions, info)
+            action = self._choose_greedy(legal_actions, info)
         
-        self.history.append((observation, info, action, legal_actions))
+        # Save the state of each stage and the agent's actions for weight training
+        print(f"\nHand: {self.current_hand}, Stage: {np.argmax(stage)}, Action: {action}\n")
+        
+        # Get current stack
+        if len(funds_history) > 0:
+            current_stack = funds_history.iloc[-1, my_position]
+        else:
+            current_stack = self.initial_stack
+
+        # to avoid reference bugs
+        import copy
+        saved_info = copy.deepcopy(info)
+
+        self.history.append((saved_info, action, legal_actions, current_stack))
         return action
 
 
-    def _choose_greedy(self, obs_array: np.ndarray, legal_actions: List[Action], info: Dict) -> Action:
-        features = self.extract_features(obs_array, info)
+    def _choose_greedy(self, legal_actions: List[Action], info: Dict) -> Action:
+        features = self._extract_features(info)
         q_values = np.dot(features, self.weights)
         legal_q = [(a, q_values[self.action_order.index(a)]) for a in legal_actions]
         return max(legal_q, key=lambda x: x[1])[0]
     
 
-    def _update(self, obs: np.ndarray, info: dict, legal_actions: List[Action], funds_history: pd.DataFrame):
+    def _update(self, funds_history: pd.DataFrame, my_position: int):
+        if len(self.history) == 0:
+            return
 
-        for i in range(len(self.history) - 1):
-            obs, info, action, legal_actions = self.history[i]
-            next_obs, next_info, next_action, next_legal_actions = self.history[i + 1]
-            prev_stack = 0
-            stack = 0
+        hand_start_stack = self.history[0][3]
+        hand_end_stack = funds_history.iloc[-1, my_position]
+        final_hand_reward = hand_end_stack - hand_start_stack
 
-            if i == 0:
-                prev_stack = self.initial_stack
-                stack = funds_history.iloc[-1, 0]
+        print(f"Final hand result: {hand_start_stack:.1f} → {hand_end_stack:.1f} (Δ {final_hand_reward:+.2f})")
+
+        # Loop through each action in the hand
+        for i, (info, action, legal_actions, stack_before) in enumerate(self.history):
+            # Immediate reward = how much we put in the pot (always ≤ 0)
+            if i + 1 < len(self.history):
+                stack_after = self.history[i + 1][3]
             else:
-                prev_stack = funds_history.iloc[-2, 0]
-                stack = funds_history.iloc[-1, 0]
+                stack_after = funds_history.iloc[-1, my_position]  # final stack
+            immediate_reward = stack_after - stack_before  # e.g. -2, -6, -10
 
+            # Future reward: only the final hand outcome, discounted backward
+            steps_to_end = len(self.history) - 1 - i
+            future_reward = final_hand_reward * (self.gamma ** steps_to_end)
 
-            reward = stack - prev_stack
+            total_reward = immediate_reward + future_reward
 
-            self._q_learning_update(obs, info, action, legal_actions, next_obs, next_info, reward)
+            # Next state (for Q(s,a) → s')
+            next_info = self.history[i + 1][0] if i + 1 < len(self.history) else None
+
+            print(f"Update [{i}]: {action:<15} | Bet: {immediate_reward:>6.2f} | Future: {future_reward:>6.2f} | Total R: {total_reward:>6.2f}")
+
+            self._q_learning_update(info, action, total_reward, legal_actions, next_info)
 
 
     def _q_learning_update(self,
-                           obs: np.ndarray, 
                            info: Dict,
                            action: Action,
-                           legal_actions: List[Action], 
-                           next_obs: np.ndarray, 
-                           next_info: Dict, 
-                           reward: float):
+                           reward: float,
+                           legal_actions: List[Action],
+                           next_info: Dict):
         
         # may want to do something to incorporate the initial stack size into the reward calculation
         
-        features = self._extract_features(obs, info) 
-
+        features = self._extract_features(info) 
         q_values = np.dot(features, self.weights)
         a_idx = self.action_order.index(action)
         q_sa = q_values[a_idx]
 
-        next_features = self._extract_features(next_obs, next_info)
-        next_q = np.dot(next_features, self.target_weights)
-        print("!!Reward used in update: ", reward)
-        target = reward + self.gamma * np.max(next_q)
-
+        if next_info is not None:
+            next_features = self._extract_features(next_info)
+            next_q = np.dot(next_features, self.target_weights)
+            target = reward + self.gamma * np.max(next_q)
+        else:
+            target = reward
+        
         td_error = target - q_sa
         self.weights[:, a_idx] += self.alpha * td_error * features
+
+        print(f"   → TD error: {td_error:6.3f} | Q({action}) was {q_sa:6.3f} → {q_sa + self.alpha * td_error * np.linalg.norm(features):6.3f}")
         
     # =====================================================================
     # FEATURES
     # =====================================================================
 
-    def _extract_features(self, obs_array: np.ndarray, info: Dict) -> np.ndarray:
+    def _extract_features(self, info: Dict) -> np.ndarray:
         """
         Extract binary features from observation.
 
