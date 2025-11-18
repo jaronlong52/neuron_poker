@@ -1,5 +1,6 @@
-from gym_env.env import Action
+from gym_env.env import Action, Stage
 import numpy as np
+import pandas as pd
 import os
 from typing import List, Dict, Any, Tuple
 
@@ -16,11 +17,11 @@ class Player:
 
     def __init__(
         self,
-        epsilon: float = 1.0,
-        alpha: float = 0.005,
-        gamma: float = 0.95,
-        name: str = "MyAgent",
-        stack_size: int = None,
+        epsilon,
+        alpha,
+        gamma,
+        name,
+        stack_size,
         weights_file: str = None
     ):
         # Required by environment
@@ -32,11 +33,9 @@ class Player:
         self.epsilon = epsilon
         self.alpha = alpha
         self.gamma = gamma
-        self.training_error = []
-        self.steps = 0
 
-        self.last_exploiting = False
-        self.last_obs = {}
+        # state-action history
+        self.history = []
 
         # Action mapping
         self.action_order = [
@@ -63,14 +62,25 @@ class Player:
     # CORE METHODS
     # =====================================================================
 
-    def action(self, legal_actions: List[Action], observation: np.ndarray, info: Dict) -> Action:
+    def action(self, legal_actions: List[Action], observation: np.ndarray, info: Dict, funds_history: pd.DataFrame) -> Action:
+
+        stage = info["community_data"]["stage"]
+        if stage[0] and self.history is not None: # if preflop but not first hand, then the previous hand ended and the agent can be updated
+            self._update(observation, info, legal_actions, funds_history)
+            self.history = [] # clear history for new hand
+
+        action = None
+
         if not legal_actions:
-            return Action.FOLD
+            action = Action.FOLD
 
         if np.random.random() < self.epsilon:
-            return np.random.choice(legal_actions)
+            action = np.random.choice(legal_actions)
         else:
-            return self._choose_greedy(observation, legal_actions, info)
+            action = self._choose_greedy(observation, legal_actions, info)
+        
+        self.history.append((observation, info, action, legal_actions))
+        return action
 
 
     def _choose_greedy(self, obs_array: np.ndarray, legal_actions: List[Action], info: Dict) -> Action:
@@ -80,36 +90,57 @@ class Player:
         return max(legal_q, key=lambda x: x[1])[0]
     
 
-    def update(self, obs: np.ndarray, info: dict, action: Action, reward: float, 
-           next_obs: np.ndarray, next_info: dict, terminated: bool):
-        
-        self.steps += 1
+    def _update(self, obs: np.ndarray, info: dict, legal_actions: List[Action], funds_history: pd.DataFrame):
 
-        # Use the info dict
-        features = self.extract_features(obs, info) 
+        for i in range(len(self.history) - 1):
+            obs, info, action, legal_actions = self.history[i]
+            next_obs, next_info, next_action, next_legal_actions = self.history[i + 1]
+            prev_stack = 0
+            stack = 0
+
+            if i == 0:
+                prev_stack = self.initial_stack
+                stack = funds_history.iloc[-1, 0]
+            else:
+                prev_stack = funds_history.iloc[-2, 0]
+                stack = funds_history.iloc[-1, 0]
+
+
+            reward = stack - prev_stack
+
+            self._q_learning_update(obs, info, action, legal_actions, next_obs, next_info, reward)
+
+
+    def _q_learning_update(self,
+                           obs: np.ndarray, 
+                           info: Dict,
+                           action: Action,
+                           legal_actions: List[Action], 
+                           next_obs: np.ndarray, 
+                           next_info: Dict, 
+                           reward: float):
+        
+        # may want to do something to incorporate the initial stack size into the reward calculation
+        
+        features = self._extract_features(obs, info) 
 
         q_values = np.dot(features, self.weights)
         a_idx = self.action_order.index(action)
         q_sa = q_values[a_idx]
 
-        if terminated:
-            target = reward
-        else:
-            # Use the next_info dict
-            next_features = self.extract_features(next_obs, next_info)
-            next_q = np.dot(next_features, self.target_weights)
-            print("!!Reward used in update: ", reward)
-            target = reward + self.gamma * np.max(next_q)
+        next_features = self._extract_features(next_obs, next_info)
+        next_q = np.dot(next_features, self.target_weights)
+        print("!!Reward used in update: ", reward)
+        target = reward + self.gamma * np.max(next_q)
 
         td_error = target - q_sa
-        self.training_error.append(td_error)
         self.weights[:, a_idx] += self.alpha * td_error * features
         
     # =====================================================================
     # FEATURES
     # =====================================================================
 
-    def extract_features(self, obs_array: np.ndarray, info: Dict) -> np.ndarray:
+    def _extract_features(self, obs_array: np.ndarray, info: Dict) -> np.ndarray:
         """
         Extract binary features from observation.
 

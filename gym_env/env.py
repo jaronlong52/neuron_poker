@@ -179,7 +179,7 @@ class HoldemTable(Env):
             while self._agent_is_autoplay() and not self.done:
                 log.debug("Autoplay agent. Call action method of agent.")
                 self._get_environment()
-                action = self.current_player.agent_obj.action(self.legal_moves, self.observation, self.info)
+                action = self.current_player.agent_obj.action(self.legal_moves, self.observation, self.info, self.funds_history)
                 if Action(action) not in self.legal_moves:
                     self._illegal_move(action)
                 else:

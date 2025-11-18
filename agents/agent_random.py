@@ -16,10 +16,11 @@ class Player:
         self.name = name
         self.autoplay = True
 
-    def action(self, action_space, observation, info):  # pylint: disable=no-self-use
+    def action(self, action_space, observation, info, funds_history):  # pylint: disable=no-self-use
         """Mandatory method that calculates the move based on the observation array and the action space."""
         _ = observation  # not using the observation for random decision
         _ = info
+        _ = funds_history
 
         this_player_action_space = {Action.FOLD, Action.CHECK, Action.CALL, Action.RAISE_POT, Action.RAISE_HALF_POT,
                                     Action.RAISE_2POT}
