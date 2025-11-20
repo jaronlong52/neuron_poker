@@ -71,11 +71,11 @@ class PlayerCycle:
 
         if self.last_raiser:
             if self.step_counter > self.last_raiser + self.max_remaining_steps_without_raising:
-                log.info("Max steps without raising has been reached. For example all calls after raiser.")
+                # log.info("Max steps without raising has been reached. For example all calls after raiser.")
                 return False
 
             if self.max_steps_after_raiser and (self.step_counter > self.max_steps_after_raiser + self.last_raiser):
-                log.debug("max steps after raiser has been reached")
+                # log.debug("max steps after raiser has been reached")
                 return False
         elif self.max_steps_after_raiser and \
                 (self.step_counter > self.max_steps_after_big_blind + self.steps_for_blind_betting):

@@ -92,7 +92,7 @@ class Player:
 
         # Update weights from previous hand when starting a new hand
         if is_new_hand:
-            print(f"\n!! Call Update (Hand {self.current_hand} -> {len(funds_history)}) !!\n")
+            # print(f"!! Call Update (Hand {self.current_hand} -> {len(funds_history)}) !!")
             self._update(funds_history, my_position)
             self.history = [] # clear history for new hand
             self.last_update_hand = self.current_hand
@@ -110,7 +110,8 @@ class Player:
             action = self._choose_greedy(legal_actions, info)
         
         # Save the state of each stage and the agent's actions for weight training
-        print(f"\nHand: {self.current_hand}, Stage: {np.argmax(stage)}, Action: {action}\n")
+        # print(f"\nHand: {self.current_hand}, Stage: {np.argmax(stage)}, Action: {action}\n")
+        # print("Legal actions:", legal_actions)
         
         # Get current stack
         if len(funds_history) > 0:
@@ -145,7 +146,7 @@ class Player:
         self.cumulative_stack.append(hand_end_stack)
         td_errors_this_hand = []
 
-        print(f"Final hand result: {hand_start_stack:.1f} → {hand_end_stack:.1f} (Δ {final_hand_reward:+.2f})")
+        # print(f"Final hand result: {hand_start_stack:.1f} → {hand_end_stack:.1f} (Δ {final_hand_reward:+.2f})")
 
         # Loop through each action in the hand
         for i, (info, action, legal_actions, stack_before) in enumerate(self.history):
@@ -165,7 +166,7 @@ class Player:
             # Next state (for Q(s,a) → s')
             next_info = self.history[i + 1][0] if i + 1 < len(self.history) else None
 
-            print(f"Update [{i}]: {action:<15} | Bet: {immediate_reward:>6.2f} | Future: {future_reward:>6.2f} | Total R: {total_reward:>6.2f}")
+            # print(f"Update [{i}]: {action:<15} | Bet: {immediate_reward:>6.2f} | Future: {future_reward:>6.2f} | Total R: {total_reward:>6.2f}")
 
             td_error = self._q_learning_update(info, action, total_reward, legal_actions, next_info)
             td_errors_this_hand.append(abs(td_error))
@@ -195,7 +196,7 @@ class Player:
         td_error = target - q_sa
         self.weights[:, a_idx] += self.alpha * td_error * features
 
-        print(f"   → TD error: {td_error:6.3f} | Q({action}) was {q_sa:6.3f} → {q_sa + self.alpha * td_error * np.linalg.norm(features):6.3f}")
+        # print(f"   → TD error: {td_error:6.3f} | Q({action}) was {q_sa:6.3f} → {q_sa + self.alpha * td_error * np.linalg.norm(features):6.3f}")
         
         return td_error
 

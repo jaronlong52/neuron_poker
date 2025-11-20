@@ -24,6 +24,7 @@ options:
 
 """
 
+from datetime import datetime
 import logging
 
 import gymnasium as gym
@@ -51,9 +52,9 @@ def command_line_parser():
         getattr(logging, args['--screenloglevel'].upper())
     _ = get_config()
     init_logger(screenlevel=screenloglevel, filename=logfile)
-    print(f"Screenloglevel: {screenloglevel}")
+    # print(f"Screenloglevel: {screenloglevel}")
     log = logging.getLogger("")
-    log.info("Initializing program")
+    # log.info("Initializing program")
 
     if args['selfplay']:
         num_episodes = 1 if not args['--episodes'] else int(args['--episodes'])
@@ -281,8 +282,20 @@ class SelfPlay:
         for i in range(2):
             self.env.unwrapped.add_player(RandomPlayer(name=f'Random_{i+1}'))
 
-        for _ in range(num_episodes):
+        print("$$ Starting training...")
+        start_time = datetime.now()
+
+        for ep in range(num_episodes):
+            print(f"$$ Episode {ep + 1}/{num_episodes}")
             self.env.reset()
+
+        print("$$ Training finished.")
+        end_time = datetime.now()
+
+        time_difference = end_time - start_time
+        print(f"Start time: {start_time}")
+        print(f"End time: {end_time}")
+        print(f"Duration: {time_difference}")
 
         # After game finishes, show training results
         training_agent.print_training_summary()
