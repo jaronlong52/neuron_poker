@@ -270,6 +270,7 @@ class SelfPlay:
 
         training_agent = MyAgent(
             epsilon=1.0,
+            epsilon_decay=0.999,
             alpha=0.005,
             gamma=0.95,
             big_blind=self.big_blind,

@@ -18,6 +18,7 @@ class Player:
     def __init__(
         self,
         epsilon,
+        epsilon_decay,
         alpha,
         gamma,
         big_blind,
@@ -32,6 +33,7 @@ class Player:
 
         # Hyperparameters
         self.epsilon = epsilon
+        self.epsilon_decay = epsilon_decay
         self.alpha = alpha
         self.gamma = gamma
         self.big_blind = big_blind
@@ -107,7 +109,8 @@ class Player:
         else:
             action = self._choose_greedy(legal_actions, info)
         
-        print("[Agent] Chose action:", action)
+        # print action chosen out of legal actions
+        print(f"[Agent] Legal: {[a.name for a in legal_actions]}, Chosen: {action.name}, Epsilon: {self.epsilon:.4f}")
 
         # to avoid reference bugs
         import copy
@@ -128,28 +131,26 @@ class Player:
         if len(self.history) == 0:
             print("History is empty")
             return
+        
+        # decay epsilon
+        self.epsilon *= self.epsilon_decay
+
+        stack_before_action = self.history[0][0]['player_data']['stack'][my_position] * (self.big_blind * 100) 
 
         # Loop through each action in the hand
         for i, (info, action) in enumerate(self.history):
-
-            # Calculate reward and get next state info or None if last action/state in hand
-            # denormalized
-            stack_before_action = self.history[i][0]['player_data']['stack'][my_position] * (self.big_blind * 100) 
             
             stack_after_action = 0
             next_info = None
             if i + 1 < len(self.history):
-                # get agents stack in action+1 index of history (after action taken)
-                # denormalized
-                stack_after_action = self.history[i + 1][0]['player_data']['stack'][my_position] * (self.big_blind * 100)
+                reward = 0
                 # get next state info from next action index in history
                 next_info = self.history[i + 1][0] if i + 1 < len(self.history) else None
             else:
                 # if last action/state of hand, then get agents stack at end of hand from funds_history
                 stack_after_action = funds_history.iloc[self.current_hand - 1][my_position]
-
-            reward = stack_after_action - stack_before_action
-            self.action_rewards.append(reward)
+                reward = stack_after_action - stack_before_action
+                self.action_rewards.append(reward)
 
             self._q_learning_update(info, action, reward, next_info)
             print(f"[Agent] Update {i}: Action={action}, Reward={reward}")

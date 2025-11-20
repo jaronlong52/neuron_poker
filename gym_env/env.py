@@ -618,7 +618,7 @@ class HoldemTable(Env):
         """Determine what moves are allowed in the current state"""
         self.legal_moves = []
 
-        if self.stage in [Stage.SHOWDOWN, Stage.END_HIDDEN]:
+        if self.stage in [Stage.SHOWDOWN]:
             return
 
         if self.player_pots[self.current_player.seat] == max(self.player_pots):
@@ -642,9 +642,6 @@ class HoldemTable(Env):
 
             if self.current_player.stack > 0:
                 self.legal_moves.append(Action.ALL_IN)
-
-        # log.warning(f"LEGAL MOVES: {self.legal_moves} | Stack: {self.current_player.stack} | "
-        #     f"Player pot: {self.player_pots[self.current_player.seat]} | Max pot: {max(self.player_pots)}")
 
         log.debug(f"Community+current round pot pot: {self.community_pot + self.current_round_pot}")
 
