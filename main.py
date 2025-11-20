@@ -264,18 +264,20 @@ class SelfPlay:
         env_name = 'neuron_poker-v0'
 
         self.stack = 10 # hard coded for simplicity
+        self.big_blind = 2
 
-        num_episodes = 1
+        num_episodes = 10
 
         training_agent = MyAgent(
             epsilon=1.0,
             alpha=0.005,
             gamma=0.95,
+            big_blind=self.big_blind,
             name="QAgent",
             stack_size=self.stack
         )
 
-        self.env = gym.make(env_name, initial_stacks=self.stack, render=self.render)
+        self.env = gym.make(env_name, initial_stacks=self.stack, small_blind=1, big_blind=self.big_blind, render=self.render)
 
         # Add players via unwrapped
         self.env.unwrapped.add_player(training_agent)
@@ -296,6 +298,8 @@ class SelfPlay:
         print(f"Start time: {start_time}")
         print(f"End time: {end_time}")
         print(f"Duration: {time_difference}")
+
+        training_agent.save_weights("my_agent_model_weights")
 
         # After game finishes, show training results
         training_agent.plot_training_progress()

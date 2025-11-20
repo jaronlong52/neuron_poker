@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Tuple
 
 
 # Configuration
-FEATURE_SIZE = 13
+FEATURE_SIZE = 16
 NUM_ACTIONS = 8
 
 
@@ -20,6 +20,7 @@ class Player:
         epsilon,
         alpha,
         gamma,
+        big_blind,
         name,
         stack_size,
         weights_file: str = None
@@ -33,6 +34,7 @@ class Player:
         self.epsilon = epsilon
         self.alpha = alpha
         self.gamma = gamma
+        self.big_blind = big_blind
 
         # state-action history
         self.history = []
@@ -105,9 +107,7 @@ class Player:
         else:
             action = self._choose_greedy(legal_actions, info)
         
-        # Save the state of each stage and the agent's actions for weight training
-        # print(f"\nHand: {self.current_hand}, Stage: {np.argmax(stage)}, Action: {action}\n")
-        # print("Legal actions:", legal_actions)
+        print("[Agent] Chose action:", action)
 
         # to avoid reference bugs
         import copy
@@ -133,14 +133,15 @@ class Player:
         for i, (info, action) in enumerate(self.history):
 
             # Calculate reward and get next state info or None if last action/state in hand
-
-            stack_before_action = self.history[i][0]['player_data']['stack'][my_position]
+            # denormalized
+            stack_before_action = self.history[i][0]['player_data']['stack'][my_position] * (self.big_blind * 100) 
             
             stack_after_action = 0
             next_info = None
             if i + 1 < len(self.history):
                 # get agents stack in action+1 index of history (after action taken)
-                stack_after_action = self.history[i + 1][0]['player_data']['stack'][my_position]
+                # denormalized
+                stack_after_action = self.history[i + 1][0]['player_data']['stack'][my_position] * (self.big_blind * 100)
                 # get next state info from next action index in history
                 next_info = self.history[i + 1][0] if i + 1 < len(self.history) else None
             else:
@@ -151,6 +152,7 @@ class Player:
             self.action_rewards.append(reward)
 
             self._q_learning_update(info, action, reward, next_info)
+            print(f"[Agent] Update {i}: Action={action}, Reward={reward}")
 
 
     def _q_learning_update(self,
@@ -183,22 +185,17 @@ class Player:
 
     def _extract_features(self, info: Dict) -> np.ndarray:
         """
-        Extract binary features from observation.
+        Extract features from observation.
 
-        Features (13 total):
-        0. equity >= 0.5 (strong hand)
-        1. equity >= 0.7 (very strong hand)
-        2. stack >= 0.5 (comfortable stack)
-        3. stack >= 1.0 (full or above stack)
-        4. stage == preflop (0)
-        5. stage == flop (1)
-        6. stage == turn (2)
-        7. stage == river (3)
-        8. community_pot >= 0.5  -the total pot for the hand
-        9. community_pot >= 1.0
-        10. current_stage_pot >= 0.25  -the pot for the current betting round
-        11. current_stage_pot >= 0.5
-        12. current_stage_pot >= 1.0
+        Features (16 total):
+        0-1. Equity (continuous 0-1, then squared for non-linearity)
+        2-3. Stack size (continuous normalized, then ratio to big blind)
+        4-7. Stage (one-hot: preflop, flop, turn, river)
+        8-9. Community pot (continuous normalized, then log scale)
+        10-12. Current round pot (continuous normalized, then log, then sqrt)
+        13. Pot odds (community_pot / (my_stack + current_bets))
+        14. Opponent aggression (rough heuristic)
+        15. Bias term (always 1.0)
         """
         features = np.zeros(FEATURE_SIZE, dtype=np.float64)
 
@@ -206,19 +203,19 @@ class Player:
         player_data = info['player_data']
         community_data = info['community_data']
 
-        # Equity bins
+        # ========== EQUITY (continuous, not binary) ==========
         equity = player_data['equity_to_river_alive']
         equity = 0.0 if np.isnan(equity) else float(equity)
-        features[0] = 1.0 if equity >= 0.5 else 0.0
-        features[1] = 1.0 if equity >= 0.7 else 0.0
+        features[0] = equity  # Raw equity (0-1)
+        features[1] = equity ** 2  # Non-linearity bonus for very strong hands
 
-        # Stack bins
+        # ========== STACK (continuous) ==========
         my_position = player_data['position']
         my_stack = player_data['stack'][my_position]
-        features[2] = 1.0 if my_stack >= 0.5 else 0.0
-        features[3] = 1.0 if my_stack >= 1.0 else 0.0
+        features[2] = my_stack  # Normalized stack (chips / (BB * 100))
+        features[3] = np.log1p(my_stack)  # Log scale to handle wide range
 
-        # Stage one-hot encoding
+        # ========== STAGE (one-hot) ==========
         stage_one_hot = community_data['stage']
         stage_idx = int(np.argmax(stage_one_hot))
         features[4] = 1.0 if stage_idx == 0 else 0.0  # preflop
@@ -226,16 +223,28 @@ class Player:
         features[6] = 1.0 if stage_idx == 2 else 0.0  # turn
         features[7] = 1.0 if stage_idx == 3 else 0.0  # river
 
-        # Community pot bins
+        # ========== COMMUNITY POT (continuous) ==========
         c_pot = float(community_data['community_pot'])
-        features[8] = 1.0 if c_pot >= 0.5 else 0.0
-        features[9] = 1.0 if c_pot >= 1.0 else 0.0
+        features[8] = c_pot  # Raw pot
+        features[9] = np.log1p(c_pot)  # Log scale
 
-        # Current stage pot bins
+        # ========== CURRENT ROUND POT (continuous) ==========
         r_pot = float(community_data['current_round_pot'])
-        features[10] = 1.0 if r_pot >= 0.25 else 0.0
-        features[11] = 1.0 if r_pot >= 0.5 else 0.0
-        features[12] = 1.0 if r_pot >= 1.0 else 0.0
+        features[10] = r_pot  # Raw round pot
+        features[11] = np.log1p(r_pot)  # Log scale
+        features[12] = np.sqrt(r_pot + 1)  # Sqrt scale
+
+        # ========== POT ODDS ==========
+        # Pot odds: how much of the total pot am I risking?
+        total_pot = c_pot + r_pot
+        total_exposure = my_stack + r_pot
+        if total_exposure > 0:
+            features[13] = total_pot / (total_exposure + 1e-6)
+        else:
+            features[13] = 0.0
+
+        # ========== BIAS TERM ==========
+        features[15] = 1.0  # Always 1 for bias
 
         return features
 
@@ -270,7 +279,7 @@ class Player:
             return
         
         plt.figure(figsize=(10, 5))
-        plt.plot(self.action_rewards, label='Action Rewards', color='blue', alpha=0.6)
+        plt.plot(self.action_rewards, label='Action Rewards', color='blue')
         plt.xlabel('Action Number')
         plt.ylabel('Reward')
         plt.title('Training Progress: Action Rewards Over Time')
