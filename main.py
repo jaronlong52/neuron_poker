@@ -265,7 +265,7 @@ class SelfPlay:
 
         self.stack = 10 # hard coded for simplicity
 
-        num_episodes = 5
+        num_episodes = 1
 
         training_agent = MyAgent(
             epsilon=1.0,
@@ -298,7 +298,6 @@ class SelfPlay:
         print(f"Duration: {time_difference}")
 
         # After game finishes, show training results
-        training_agent.print_training_summary()
         training_agent.plot_training_progress()
 
 
