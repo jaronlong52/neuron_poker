@@ -407,6 +407,13 @@ class HoldemTable(Env):
         """Deal new cards to players and reset table states."""
         self._save_funds_history()
 
+        # reset every players num_raises_in_street
+        for player in self.players:
+            player.num_raises_in_street = {Stage.PREFLOP: 0,
+                                           Stage.FLOP: 0,
+                                           Stage.TURN: 0,
+                                           Stage.RIVER: 0}
+
         if self._check_game_over():
             return
 
