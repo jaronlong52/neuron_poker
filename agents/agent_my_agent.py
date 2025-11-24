@@ -46,7 +46,7 @@ class Player:
         self.current_hand = 0
 
         # Training metrics
-        self.action_rewards = []  # Track reward per action
+        self.hand_rewards = []  # Track reward per action
 
         # Action mapping
         self.action_order = [
@@ -76,27 +76,6 @@ class Player:
 
         _ = observation  # not used
 
-        stage = info["community_data"]["stage"]
-        my_position = info["player_data"]["position"]
-
-        # Detect if we're at the start of a new hand by checking:
-        # 1. We're in preflop (stage[0] == True)
-        # 2. The funds_history has grown (new hand was recorded)
-        # 3. We haven't updated for this hand yet
-        is_new_hand = (
-            stage[0] and  # In preflop
-            len(funds_history) > self.current_hand and  # New hand recorded in funds_history
-            self.last_update_hand < self.current_hand and  # Haven't updated yet
-            len(self.history) > 0  # Have history to update from
-        )
-
-        # Update weights from previous hand when starting a new hand
-        if is_new_hand:
-            # print(f"!! Call Update (Hand {self.current_hand} -> {len(funds_history)}) !!")
-            self._update(funds_history, my_position)
-            self.history = [] # clear history for new hand
-            self.last_update_hand = self.current_hand
-
         # Update current hand counter
         if len(funds_history) > self.current_hand:
             self.current_hand = len(funds_history)
@@ -110,14 +89,20 @@ class Player:
             action = self._choose_greedy(legal_actions, info)
         
         # print action chosen out of legal actions
-        print(f"[Agent] Legal: {[a.name for a in legal_actions]}, Chosen: {action.name}, Epsilon: {self.epsilon:.4f}")
+        print(f"[Agent]  Chosen: {action.name},      Legal: {[a.name for a in legal_actions]}, Epsilon: {self.epsilon:.4f}")
 
         # to avoid reference bugs
         import copy
         saved_info = copy.deepcopy(info)
 
         self.history.append((saved_info, action))
+
         return action
+    
+
+    def add_history_marker(self):
+        """Add a marker to indicate the end of a hand in history."""
+        self.history.append((None, None))
 
 
     def _choose_greedy(self, legal_actions: List[Action], info: Dict) -> Action:
@@ -127,30 +112,40 @@ class Player:
         return max(legal_q, key=lambda x: x[1])[0]
     
 
-    def _update(self, funds_history: pd.DataFrame, my_position: int):
+    def update(self, funds_history: pd.DataFrame, my_position: int):
         if len(self.history) == 0:
             print("History is empty")
             return
         
-        # decay epsilon
-        self.epsilon *= self.epsilon_decay
+        hand_count = 0
 
-        stack_before_action = self.history[0][0]['player_data']['stack'][my_position] * (self.big_blind * 100) 
-
-        # Loop through each action in the hand
+        # Loop through each action in the episode
         for i, (info, action) in enumerate(self.history):
-            
-            stack_after_action = 0
-            next_info = None
-            if i + 1 < len(self.history):
-                reward = 0
-                # get next state info from next action index in history
-                next_info = self.history[i + 1][0] if i + 1 < len(self.history) else None
-            else:
-                # if last action/state of hand, then get agents stack at end of hand from funds_history
-                stack_after_action = funds_history.iloc[self.current_hand - 1][my_position]
+
+            if info is None and action is None:
+                print("Skipping marker")
+                continue # skip hand start markers
+        
+            if i + 1 == len(self.history):
+                print("End of history reached")
+                break # end of history
+
+            next_info = None 
+
+            if self.history[i + 1][0] is None: # last action in hand
+                stack_before_action = funds_history.iloc[hand_count].iloc[my_position]
+                if hand_count + 1 >= len(funds_history):
+                    print("No more funds history")
+                    stack_after_action = stack_before_action
+                    break
+                else:
+                    stack_after_action = funds_history.iloc[hand_count + 1].iloc[my_position]
                 reward = stack_after_action - stack_before_action
-                self.action_rewards.append(reward)
+                self.hand_rewards.append(reward)
+                hand_count += 1
+            else: # intermediate action
+                reward = 0
+                next_info = self.history[i + 1][0]
 
             self._q_learning_update(info, action, reward, next_info)
             print(f"[Agent] Update {i}: Action={action}, Reward={reward}")
@@ -275,15 +270,15 @@ class Player:
         """Plot training metrics to visualize learning"""
         import matplotlib.pyplot as plt
         
-        if len(self.action_rewards) == 0:
+        if len(self.hand_rewards) == 0:
             print("No action rewards data to plot yet.")
             return
         
         plt.figure(figsize=(10, 5))
-        plt.plot(self.action_rewards, label='Action Rewards', color='blue')
-        plt.xlabel('Action Number')
+        plt.plot(self.hand_rewards, label='Action Rewards', color='blue')
+        plt.xlabel('Hand Number')
         plt.ylabel('Reward')
-        plt.title('Training Progress: Action Rewards Over Time')
+        plt.title('Training Progress: Hand Rewards Over Time')
         plt.legend()
 
         plt.tight_layout()

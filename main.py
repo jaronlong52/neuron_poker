@@ -266,7 +266,7 @@ class SelfPlay:
         self.stack = 10 # hard coded for simplicity
         self.big_blind = 2
 
-        num_episodes = 10
+        num_episodes = 5
 
         training_agent = MyAgent(
             epsilon=1.0,

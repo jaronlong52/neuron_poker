@@ -407,6 +407,10 @@ class HoldemTable(Env):
         """Deal new cards to players and reset table states."""
         self._save_funds_history()
 
+        for player in self.players:
+            if hasattr(player.agent_obj, 'add_history_marker'):
+                player.agent_obj.add_history_marker()
+
         # reset every players num_raises_in_street
         for player in self.players:
             player.num_raises_in_street = {Stage.PREFLOP: 0,
@@ -474,6 +478,9 @@ class HoldemTable(Env):
         self.done = True
         player_names = [f"{i} - {player.name}" for i, player in enumerate(self.players)]
         self.funds_history.columns = player_names
+        for player in self.players:
+            if hasattr(player.agent_obj, 'update'):
+                player.agent_obj.update(funds_history=self.funds_history, my_position=player.seat)
         if self.funds_plot:
             self.funds_history.reset_index(drop=True).plot()
         # log.info(self.funds_history)
