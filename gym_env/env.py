@@ -483,7 +483,7 @@ class HoldemTable(Env):
                 player.agent_obj.update(funds_history=self.funds_history, my_position=player.seat)
         if self.funds_plot:
             self.funds_history.reset_index(drop=True).plot()
-        # log.info(self.funds_history)
+        log.info(self.funds_history)
         # plt.show()
 
         winner_in_episodes.append(self.winner_ix)

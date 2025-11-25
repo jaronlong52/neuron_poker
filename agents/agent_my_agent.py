@@ -48,6 +48,11 @@ class Player:
         # Training metrics
         self.hand_rewards = []  # Track reward per action
 
+        # debugging
+        self.num_actions = 0
+        self.num_updates = 0
+        self.num_markers = 0
+
         # Action mapping
         self.action_order = [
             Action.FOLD,
@@ -97,12 +102,20 @@ class Player:
 
         self.history.append((saved_info, action))
 
+        self.num_actions += 1
         return action
     
 
     def add_history_marker(self):
         """Add a marker to indicate the end of a hand in history."""
+        self.num_markers += 1
         self.history.append((None, None))
+
+    
+    def decay_epsilon(self):
+        """Decay epsilon after each hand."""
+        self.epsilon *= self.epsilon_decay
+        self.epsilon = max(self.epsilon, 0.01)
 
 
     def _choose_greedy(self, legal_actions: List[Action], info: Dict) -> Action:
@@ -123,7 +136,6 @@ class Player:
         for i, (info, action) in enumerate(self.history):
 
             if info is None and action is None:
-                print("Skipping marker")
                 continue # skip hand start markers
         
             if i + 1 == len(self.history):
@@ -147,6 +159,8 @@ class Player:
                 reward = 0
                 next_info = self.history[i + 1][0]
 
+            self.num_updates += 1
+            # print("Hand count:", hand_count)
             self._q_learning_update(info, action, reward, next_info)
             print(f"[Agent] Update {i}: Action={action}, Reward={reward}")
 

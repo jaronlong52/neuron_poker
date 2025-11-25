@@ -266,7 +266,7 @@ class SelfPlay:
         self.stack = 10 # hard coded for simplicity
         self.big_blind = 2
 
-        num_episodes = 5
+        num_episodes = 100
 
         training_agent = MyAgent(
             epsilon=1.0,
@@ -278,7 +278,7 @@ class SelfPlay:
             stack_size=self.stack
         )
 
-        self.env = gym.make(env_name, initial_stacks=self.stack, small_blind=1, big_blind=self.big_blind, render=self.render)
+        self.env = gym.make(env_name, initial_stacks=self.stack, small_blind=1, big_blind=self.big_blind, render=self.render, funds_plot=False)
 
         # Add players via unwrapped
         self.env.unwrapped.add_player(training_agent)
@@ -291,6 +291,16 @@ class SelfPlay:
         for ep in range(num_episodes):
             print(f"$$ Episode {ep + 1}/{num_episodes}")
             self.env.reset()
+            training_agent.decay_epsilon()
+            # print("---------------------------")
+            # print("Num Actions: ", training_agent.num_actions)
+            # print("Num Updates: ", training_agent.num_updates)
+            # print("Num markers: ", training_agent.num_markers)
+            # print("---------------------------")
+            training_agent.num_actions = 0
+            training_agent.num_updates = 0
+            training_agent.num_markers = 0
+            training_agent.history = []
 
         print("$$ Training finished.")
         end_time = datetime.now()
