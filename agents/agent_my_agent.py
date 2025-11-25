@@ -47,6 +47,9 @@ class Player:
 
         # Training metrics
         self.hand_rewards = []  # Track reward per action
+        self.td_errors = []            # one value per update
+        self.mean_td_errors = []       # optional, mean per hand
+
 
         # debugging
         self.num_actions = 0
@@ -164,6 +167,11 @@ class Player:
             self._q_learning_update(info, action, reward, next_info)
             print(f"[Agent] Update {i}: Action={action}, Reward={reward}")
 
+        if len(self.td_errors) > 0:
+            self.mean_td_errors.append(np.mean(self.td_errors))
+            self.td_errors = []
+
+
 
     def _q_learning_update(self,
                            info: Dict,
@@ -186,6 +194,7 @@ class Player:
             target = reward
         
         td_error = target - q_sa
+        self.td_errors.append(td_error ** 2)
         self.weights[:, a_idx] += self.alpha * td_error * features
 
 
@@ -280,25 +289,23 @@ class Player:
     # =====================================================================
     # TRAINING METRICS AND VISUALIZATION
     # ====================================================================
-    def plot_training_progress(self):
-        """Plot training metrics to visualize learning"""
+    def plot_td_error(self):
         import matplotlib.pyplot as plt
-        
-        if len(self.hand_rewards) == 0:
-            print("No action rewards data to plot yet.")
-            return
-        
-        plt.figure(figsize=(10, 5))
-        plt.plot(self.hand_rewards, label='Action Rewards', color='blue')
-        plt.xlabel('Hand Number')
-        plt.ylabel('Reward')
-        plt.title('Training Progress: Hand Rewards Over Time')
-        plt.legend()
 
+        if len(self.mean_td_errors) == 0:
+            print("No TD error data recorded.")
+            return
+
+        plt.figure(figsize=(10, 5))
+        plt.plot(self.mean_td_errors)
+        plt.xlabel("Hand Number")
+        plt.ylabel("Mean Squared TD Error")
+        plt.title("TD Error Over Training")
         plt.tight_layout()
-        plt.savefig('training_progress.png', dpi=150, bbox_inches='tight')
-        print(f"\n[Agent] Training plot saved as 'training_progress.png'")
+        plt.savefig("td_error_progress.png", dpi=150)
+        print("[Agent] TD error plot saved as 'td_error_progress.png'")
         plt.show()
+
 
     def __str__(self):
         return self.name

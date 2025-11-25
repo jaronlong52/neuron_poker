@@ -313,7 +313,7 @@ class SelfPlay:
         training_agent.save_weights("my_agent_model_weights")
 
         # After game finishes, show training results
-        training_agent.plot_training_progress()
+        training_agent.plot_td_error()
 
 
 if __name__ == '__main__':
