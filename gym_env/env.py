@@ -196,12 +196,6 @@ class HoldemTable(Env):
                     self.first_action_for_hand[self.acting_agent] = False
                     self._calculate_reward(action)
 
-        # --- EARLY TERMINATION FOR PLAYER 0 ---
-        # if self.players[0].stack <= 0:
-        #     self.done = True
-        #     print("Player 0 lost. Ending episode.")
-        #     return self.array_everything, self.reward, True, False, self.info
-
         log.debug(f"Previous action reward for seat {self.acting_agent}: {self.reward}")
         return self.array_everything, self.reward, self.done, False, self.info
 

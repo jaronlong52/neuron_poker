@@ -266,7 +266,7 @@ class SelfPlay:
         self.stack = 10 # hard coded for simplicity
         self.big_blind = 2
 
-        num_episodes = 100
+        num_episodes = 1000
 
         training_agent = MyAgent(
             epsilon=1.0,
@@ -309,6 +309,7 @@ class SelfPlay:
         print(f"Start time: {start_time}")
         print(f"End time: {end_time}")
         print(f"Duration: {time_difference}")
+        print(f"Agent Wins: {training_agent.wins} out of {num_episodes} games.")
 
         training_agent.save_weights("my_agent_model_weights")
 

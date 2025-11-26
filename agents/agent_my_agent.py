@@ -48,7 +48,8 @@ class Player:
         # Training metrics
         self.hand_rewards = []  # Track reward per action
         self.td_errors = []            # one value per update
-        self.mean_td_errors = []       # optional, mean per hand
+        self.hand_mean_squared_errors = []
+        self.wins = 0
 
 
         # debugging
@@ -132,45 +133,60 @@ class Player:
         if len(self.history) == 0:
             print("History is empty")
             return
-        
-        hand_count = 0
 
-        # Loop through each action in the episode
+        hand_count = 0
+        hand_td_errors = []  # Local accumulator for THIS hand
+
         for i, (info, action) in enumerate(self.history):
 
             if info is None and action is None:
-                continue # skip hand start markers
-        
+                continue  # skip hand start markers
+            
             if i + 1 == len(self.history):
                 print("End of history reached")
-                break # end of history
+                break
 
             next_info = None 
 
-            if self.history[i + 1][0] is None: # last action in hand
+            # FIRST: Determine if this is last action of hand
+            is_last_action_in_hand = self.history[i + 1][0] is None
+
+            # Calculate reward
+            if is_last_action_in_hand:
                 stack_before_action = funds_history.iloc[hand_count].iloc[my_position]
                 if hand_count + 1 >= len(funds_history):
                     print("No more funds history")
-                    stack_after_action = stack_before_action
                     break
                 else:
                     stack_after_action = funds_history.iloc[hand_count + 1].iloc[my_position]
+                    
+                if stack_after_action == self.initial_stack:
+                   self.wins += 1
                 reward = stack_after_action - stack_before_action
                 self.hand_rewards.append(reward)
-                hand_count += 1
-            else: # intermediate action
+            else:
                 reward = 0
                 next_info = self.history[i + 1][0]
 
+            # SECOND: Perform Q-learning update (computes TD error)
             self.num_updates += 1
-            # print("Hand count:", hand_count)
             self._q_learning_update(info, action, reward, next_info)
-            print(f"[Agent] Update {i}: Action={action}, Reward={reward}")
 
-        if len(self.td_errors) > 0:
-            self.mean_td_errors.append(np.mean(self.td_errors))
-            self.td_errors = []
+            # THIRD: Collect the TD error that was just computed
+            td_error = self.td_errors[-1]  # Get the LAST TD error added
+            hand_td_errors.append(td_error)
 
+            print(f"[Agent] Update {i}: Action={action}, Reward={reward}, TD Error={td_error:.4f}")
+
+            # FOURTH: If hand ended, finalize the metrics
+            if is_last_action_in_hand:
+                # Calculate mean TD error for this completed hand
+                mean_mse = np.mean(np.square(hand_td_errors))
+                self.hand_mean_squared_errors.append(mean_mse)
+
+                # Reset for next hand
+                hand_td_errors = []
+                hand_count += 1
 
 
     def _q_learning_update(self,
@@ -194,7 +210,7 @@ class Player:
             target = reward
         
         td_error = target - q_sa
-        self.td_errors.append(td_error ** 2)
+        self.td_errors.append(td_error)
         self.weights[:, a_idx] += self.alpha * td_error * features
 
 
@@ -203,67 +219,55 @@ class Player:
     # =====================================================================
 
     def _extract_features(self, info: Dict) -> np.ndarray:
-        """
-        Extract features from observation.
-
-        Features (16 total):
-        0-1. Equity (continuous 0-1, then squared for non-linearity)
-        2-3. Stack size (continuous normalized, then ratio to big blind)
-        4-7. Stage (one-hot: preflop, flop, turn, river)
-        8-9. Community pot (continuous normalized, then log scale)
-        10-12. Current round pot (continuous normalized, then log, then sqrt)
-        13. Pot odds (community_pot / (my_stack + current_bets))
-        14. Opponent aggression (rough heuristic)
-        15. Bias term (always 1.0)
-        """
         features = np.zeros(FEATURE_SIZE, dtype=np.float64)
-
-        # Extract from info dict
         player_data = info['player_data']
         community_data = info['community_data']
 
-        # ========== EQUITY (continuous, not binary) ==========
+        # ========== EQUITY ==========
         equity = player_data['equity_to_river_alive']
         equity = 0.0 if np.isnan(equity) else float(equity)
-        features[0] = equity  # Raw equity (0-1)
-        features[1] = equity ** 2  # Non-linearity bonus for very strong hands
+        features[0] = equity  # [0, 1]
+        features[1] = equity ** 2
 
-        # ========== STACK (continuous) ==========
+        # ========== STACK - NORMALIZE ==========
         my_position = player_data['position']
         my_stack = player_data['stack'][my_position]
-        features[2] = my_stack  # Normalized stack (chips / (BB * 100))
-        features[3] = np.log1p(my_stack)  # Log scale to handle wide range
+        # Instead of raw stack, normalize by big blind
+        normalized_stack = min(my_stack / 100, 1.0)  # Cap at 1.0
+        features[2] = normalized_stack
+        features[3] = np.log1p(my_stack) / 10  # Divide by 10 to reduce scale
 
-        # ========== STAGE (one-hot) ==========
+        # ========== STAGE ==========
         stage_one_hot = community_data['stage']
         stage_idx = int(np.argmax(stage_one_hot))
-        features[4] = 1.0 if stage_idx == 0 else 0.0  # preflop
-        features[5] = 1.0 if stage_idx == 1 else 0.0  # flop
-        features[6] = 1.0 if stage_idx == 2 else 0.0  # turn
-        features[7] = 1.0 if stage_idx == 3 else 0.0  # river
+        features[4] = 1.0 if stage_idx == 0 else 0.0
+        features[5] = 1.0 if stage_idx == 1 else 0.0
+        features[6] = 1.0 if stage_idx == 2 else 0.0
+        features[7] = 1.0 if stage_idx == 3 else 0.0
 
-        # ========== COMMUNITY POT (continuous) ==========
+        # ========== POTS - NORMALIZE ==========
         c_pot = float(community_data['community_pot'])
-        features[8] = c_pot  # Raw pot
-        features[9] = np.log1p(c_pot)  # Log scale
-
-        # ========== CURRENT ROUND POT (continuous) ==========
         r_pot = float(community_data['current_round_pot'])
-        features[10] = r_pot  # Raw round pot
-        features[11] = np.log1p(r_pot)  # Log scale
-        features[12] = np.sqrt(r_pot + 1)  # Sqrt scale
+
+        # Normalize pots relative to big blind
+        normalized_c_pot = min(c_pot / 100, 1.0)  # Cap at 1.0
+        normalized_r_pot = min(r_pot / 100, 1.0)  # Cap at 1.0
+
+        features[8] = normalized_c_pot
+        features[9] = normalized_r_pot
+        features[10] = np.log1p(c_pot) / 10
+        features[11] = np.log1p(r_pot) / 10
+        features[12] = np.sqrt(min(r_pot, 100)) / 10  # Sqrt and normalize
 
         # ========== POT ODDS ==========
-        # Pot odds: how much of the total pot am I risking?
         total_pot = c_pot + r_pot
         total_exposure = my_stack + r_pot
         if total_exposure > 0:
-            features[13] = total_pot / (total_exposure + 1e-6)
+            features[13] = min(total_pot / (total_exposure + 1e-6), 1.0)  # Cap at 1.0
         else:
             features[13] = 0.0
 
-        # ========== BIAS TERM ==========
-        features[15] = 1.0  # Always 1 for bias
+        features[15] = 1.0  # Bias
 
         return features
 
@@ -292,18 +296,20 @@ class Player:
     def plot_td_error(self):
         import matplotlib.pyplot as plt
 
-        if len(self.mean_td_errors) == 0:
+        if len(self.hand_mean_squared_errors) == 0:
             print("No TD error data recorded.")
             return
 
-        plt.figure(figsize=(10, 5))
-        plt.plot(self.mean_td_errors)
+        plt.figure(figsize=(12, 6))
+        plt.plot(self.hand_mean_squared_errors, linewidth=2, label='Mean Squared TD Error')
         plt.xlabel("Hand Number")
         plt.ylabel("Mean Squared TD Error")
-        plt.title("TD Error Over Training")
+        plt.title("TD Error Over Training (Hand-by-Hand)")
+        plt.legend()
+        plt.grid(True, alpha=0.3)
         plt.tight_layout()
         plt.savefig("td_error_progress.png", dpi=150)
-        print("[Agent] TD error plot saved as 'td_error_progress.png'")
+        print(f"[Agent] TD error plot saved. Data points: {len(self.hand_mean_squared_errors)}")
         plt.show()
 
 
