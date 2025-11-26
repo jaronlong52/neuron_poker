@@ -46,7 +46,6 @@ class Player:
         self.current_hand = 0
 
         # Training metrics
-        self.hand_rewards = []  # Track reward per action
         self.td_errors = []            # one value per update
         self.hand_mean_squared_errors = []
         self.wins = 0
@@ -153,20 +152,19 @@ class Player:
 
             # Calculate reward
             if is_last_action_in_hand:
-                stack_before_action = funds_history.iloc[hand_count].iloc[my_position]
+                start_of_hand_stack = funds_history.iloc[hand_count].iloc[my_position]
                 if hand_count + 1 >= len(funds_history):
                     print("No more funds history")
                     break
                 else:
-                    stack_after_action = funds_history.iloc[hand_count + 1].iloc[my_position]
+                    end_of_hand_stack = funds_history.iloc[hand_count + 1].iloc[my_position]
                     
-                if stack_after_action == self.initial_stack:
-                   self.wins += 1
-                reward = stack_after_action - stack_before_action
-                self.hand_rewards.append(reward)
+                reward = 1 if end_of_hand_stack > start_of_hand_stack else 0
             else:
-                reward = 0
+                player_win_prob_before_action = info['player_data']['equity_to_river_alive']
                 next_info = self.history[i + 1][0]
+                player_win_prob_after_action = next_info['player_data']['equity_to_river_alive']
+                reward = (player_win_prob_after_action - player_win_prob_before_action) * self.big_blind
 
             # SECOND: Perform Q-learning update (computes TD error)
             self.num_updates += 1
