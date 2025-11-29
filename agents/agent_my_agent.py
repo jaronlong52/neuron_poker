@@ -46,7 +46,6 @@ class Player:
         self.current_hand = 0
 
         # Training metrics
-        self.td_errors = []            # one value per update
         self.hand_mean_squared_errors = []
         self.wins = 0
 
@@ -160,6 +159,7 @@ class Player:
                     end_of_hand_stack = funds_history.iloc[hand_count + 1].iloc[my_position]
                     
                 reward = 1 if end_of_hand_stack > start_of_hand_stack else 0
+                self.wins += reward
             else:
                 player_win_prob_before_action = info['player_data']['equity_to_river_alive']
                 next_info = self.history[i + 1][0]
@@ -168,10 +168,9 @@ class Player:
 
             # SECOND: Perform Q-learning update (computes TD error)
             self.num_updates += 1
-            self._q_learning_update(info, action, reward, next_info)
+            td_error = self._q_learning_update(info, action, reward, next_info)
 
             # THIRD: Collect the TD error that was just computed
-            td_error = self.td_errors[-1]  # Get the LAST TD error added
             hand_td_errors.append(td_error)
 
             print(f"[Agent] Update {i}: Action={action}, Reward={reward}, TD Error={td_error:.4f}")
@@ -208,13 +207,18 @@ class Player:
             target = reward
         
         td_error = target - q_sa
-        self.td_errors.append(td_error)
         self.weights[:, a_idx] += self.alpha * td_error * features
+        return td_error
 
 
     # =====================================================================
     # FEATURES
     # =====================================================================
+
+
+    GOOD IMPOVEMENTS IN CLUADE CHAT
+
+
 
     def _extract_features(self, info: Dict) -> np.ndarray:
         features = np.zeros(FEATURE_SIZE, dtype=np.float64)
@@ -298,16 +302,23 @@ class Player:
             print("No TD error data recorded.")
             return
 
+        data = np.array(self.hand_mean_squared_errors)
+
+        # Dynamic window: ~5-10% of data, minimum 5
+        window = max(5, len(data) // 15)
+        smoothed = np.convolve(data, np.ones(window)/window, mode='valid')
+
         plt.figure(figsize=(12, 6))
-        plt.plot(self.hand_mean_squared_errors, linewidth=2, label='Mean Squared TD Error')
+        plt.plot(data, linewidth=1, alpha=0.3, label='Raw TD Error')
+        plt.plot(smoothed, linewidth=2, label=f'Smoothed (window={window})')
         plt.xlabel("Hand Number")
         plt.ylabel("Mean Squared TD Error")
-        plt.title("TD Error Over Training (Hand-by-Hand)")
+        plt.title("TD Error Over Training")
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
         plt.savefig("td_error_progress.png", dpi=150)
-        print(f"[Agent] TD error plot saved. Data points: {len(self.hand_mean_squared_errors)}")
+        print(f"Data points: {len(self.hand_mean_squared_errors)}, Window size: {window}")
         plt.show()
 
 
