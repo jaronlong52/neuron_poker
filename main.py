@@ -260,13 +260,14 @@ class SelfPlay:
         """1 MyAgent vs 5 random"""
         from agents.agent_my_agent import Player as MyAgent
         from agents.agent_random import Player as RandomPlayer
+        from agents.agent_consider_equity import Player as EquityPlayer
 
         env_name = 'neuron_poker-v0'
 
         self.stack = 10 # hard coded for simplicity
         self.big_blind = 2
 
-        num_episodes = 10
+        num_episodes = 100
 
         training_agent = MyAgent(
             epsilon=1.0,
@@ -285,6 +286,11 @@ class SelfPlay:
         for i in range(2):
             self.env.unwrapped.add_player(RandomPlayer(name=f'Random_{i+1}'))
 
+        self.env.unwrapped.add_player(EquityPlayer(name='equity/20/30', min_call_equity=.2, min_bet_equity=-.3))
+        self.env.unwrapped.add_player(EquityPlayer(name='equity/50/50', min_call_equity=.5, min_bet_equity=-.5))
+        self.env.unwrapped.add_player(EquityPlayer(name='equity/50/80', min_call_equity=.8, min_bet_equity=-.8))
+        self.env.unwrapped.add_player(EquityPlayer(name='equity/70/70', min_call_equity=.7, min_bet_equity=-.7))
+
         print("$$ Starting training...")
         start_time = datetime.now()
 
@@ -300,7 +306,7 @@ class SelfPlay:
             training_agent.num_actions = 0
             training_agent.num_updates = 0
             training_agent.num_markers = 0
-            training_agent.history = []
+            training_agent.episode_history = []
 
         print("$$ Training finished.")
         end_time = datetime.now()
@@ -309,7 +315,7 @@ class SelfPlay:
         print(f"Start time: {start_time}")
         print(f"End time: {end_time}")
         print(f"Duration: {time_difference}")
-        print(f"Agent Wins: {training_agent.wins} out of {num_episodes} games.")
+        print(f"Agent Wins: {training_agent.game_wins} out of {num_episodes} games.")
 
         training_agent.save_weights("my_agent_model_weights")
 

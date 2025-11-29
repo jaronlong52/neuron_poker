@@ -16,9 +16,10 @@ class Player:
 
         self.autoplay = True
 
-    def action(self, action_space, observation, info):  # pylint: disable=no-self-use
+    def action(self, action_space, observation, info, funds_history):  # pylint: disable=no-self-use
         """Mandatory method that calculates the move based on the observation array and the action space."""
         _ = observation
+        _ = funds_history
         equity_alive = info["player_data"]["equity_to_river_alive"]
 
         incremen1 = 0.1

@@ -401,10 +401,6 @@ class HoldemTable(Env):
         """Deal new cards to players and reset table states."""
         self._save_funds_history()
 
-        for player in self.players:
-            if hasattr(player.agent_obj, 'add_history_marker'):
-                player.agent_obj.add_history_marker()
-
         # reset every players num_raises_in_street
         for player in self.players:
             player.num_raises_in_street = {Stage.PREFLOP: 0,
@@ -567,6 +563,10 @@ class HoldemTable(Env):
         self._clean_up_pots()
         self.winner_ix = self._get_winner()
         self._award_winner(self.winner_ix)
+
+        for player in self.players:
+            if hasattr(player.agent_obj, 'add_history_marker'):
+                player.agent_obj.add_history_marker()
 
     def _get_winner(self):
         """Determine which player has won the hand"""
