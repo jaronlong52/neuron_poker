@@ -274,6 +274,7 @@ class Player:
             
         # if agents final stack is not zero, consider it a win
         self.game_wins += 1 if funds_history.iloc[-1].iloc[my_position] > 0 else 0
+        self.num_actions = 0
 
 
     def _q_learning_update(self,

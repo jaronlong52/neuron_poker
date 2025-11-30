@@ -21,6 +21,8 @@ options:
   --screenloglevel=<>       log level on screen
   --episodes=<>             number of episodes to play
   --stack=<>                starting stack for each player [default: 500].
+  --test                    test mode for my-agent
+  --weights_file=<>         weights file for my-agent
 
 """
 
@@ -83,7 +85,9 @@ def command_line_parser():
             runner.dqn_play_keras_rl(model_name)
 
         elif args['my-agent']:
-            runner.my_agent_play()
+            test_mode = False if not args['--test'] else True
+            weights_file = None if not args['--weights_file'] else args['--weights_file']
+            runner.my_agent_play(test_mode, weights_file)
 
 
     else:
@@ -256,7 +260,83 @@ class SelfPlay:
         print(league_table)
         print(f"Best Player: {best_player}")
 
-    def my_agent_play(self):
+    def my_agent_test(self, agent, weights_path, save_file="temp_name", test_episodes=100):
+        """
+        Test the agent with epsilon = 0 using loaded weights.
+        Tracks win counts and produces a bar graph.
+        """
+        import matplotlib.pyplot as plt
+
+        # Load trained weights
+        agent.load_weights(weights_path)
+        agent.epsilon = 0.0  # no exploration during testing
+
+        # Track wins per player
+        player_names = [p.name for p in self.env.unwrapped.players]
+        win_counts = {name: 0 for name in player_names}
+
+        for ep in range(test_episodes):
+            print(f"[TEST] Episode {ep+1}/{test_episodes}")
+
+            print("$$ Starting testing...")
+            start_time = datetime.now()
+
+            for ep in range(test_episodes):
+                print(f"$$ Episode {ep + 1}/{test_episodes}")
+                self.env.reset()
+                agent.num_actions = 0
+                agent.num_updates = 0
+                agent.num_markers = 0
+                agent.episode_history = []
+
+                # --- Get final funds from agent episode_history ---
+                valid_steps = [step for step in agent.episode_history if step[0] is not None]
+
+                if len(valid_steps) == 0:
+                    print("[TEST] ERROR: episode_history empty — cannot determine winner.")
+                    continue
+                
+                last_info = valid_steps[-1][0]
+
+                # Extract stacks depending on how they are named
+                if "player_funds" in last_info:
+                    final_funds = np.array(last_info["player_funds"])
+                elif "stacks" in last_info:
+                    final_funds = np.array(last_info["stacks"])
+                elif "player_funds_at_action" in last_info:
+                    final_funds = np.array(last_info["player_funds_at_action"])
+                else:
+                    raise ValueError("[TEST] Could not find stack information in last_info")
+                
+                winner_index = final_funds.argmax()
+                winner_name = player_names[winner_index]
+                win_counts[winner_name] += 1
+
+        print("$$ Testing finished.")
+        end_time = datetime.now()
+
+        time_difference = end_time - start_time
+        print(f"Start time: {start_time}")
+        print(f"End time: {end_time}")
+        print(f"Duration: {time_difference}")
+
+        print("\n### TEST RESULTS ###")
+        for name, count in win_counts.items():
+            print(f"{name}: {count} wins")
+
+        # --------- Bar Graph Visualization ---------
+        plt.figure(figsize=(10, 6))
+        plt.bar(win_counts.keys(), win_counts.values())
+        plt.title("Agent vs Random Players — Test Win Counts")
+        plt.xlabel("Player")
+        plt.ylabel("Wins")
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        save_file += "_test_results"
+        plt.savefig(save_file, dpi=150)
+        plt.show()
+
+    def my_agent_play(self, test_mode=False, weights_file=None):
         """1 MyAgent vs 5 random"""
         from agents.agent_my_agent import Player as MyAgent
         from agents.agent_random import Player as RandomPlayer
@@ -266,8 +346,12 @@ class SelfPlay:
 
         self.stack = 100 # hard coded for simplicity
         self.big_blind = 2
-
         num_episodes = 1000
+
+        # Name of the file to save weights to after training
+        save_weights_to_file = "weights_s100_bb2_epi1000_passes1"
+        # Name of the file to save plotted results to after training
+        save_plot_to_file = "td_error_s100_bb2_epi1000_passes1"
 
         training_agent = MyAgent(
             epsilon=1.0,
@@ -292,6 +376,25 @@ class SelfPlay:
         self.env.unwrapped.add_player(EquityPlayer(name='equity/50/80', min_call_equity=.8, min_bet_equity=-.8))
         self.env.unwrapped.add_player(EquityPlayer(name='equity/70/70', min_call_equity=.7, min_bet_equity=-.7))
 
+        # -------------------------
+        # *** TEST MODE BRANCH ***
+        # -------------------------
+        if test_mode:
+            if weights_file is None:
+                raise ValueError("weights_file must be provided when test_mode=True.")
+
+            print("### Running AGENT TEST MODE ###")
+            self.my_agent_test(
+                agent=training_agent,
+                weights_path=weights_file,
+                save_file=save_plot_to_file
+            )
+            return  # prevent running training afterwards
+
+
+        # -------------------------
+        # *** TRAINING MODE ***
+        # -------------------------
         print("$$ Starting training...")
         start_time = datetime.now()
 
@@ -318,12 +421,10 @@ class SelfPlay:
         print(f"Duration: {time_difference}")
         print(f"Agent Wins: {training_agent.game_wins} out of {num_episodes} games.")
 
-        file_name = "weights_s100_bb2_epi1000_passes10_2"
-
-        training_agent.save_weights(file_name)
+        training_agent.save_weights(save_weights_to_file)
 
         # After game finishes, show training results
-        training_agent.plot_td_error(file_name)
+        training_agent.plot_td_error(save_plot_to_file)
 
 
 if __name__ == '__main__':

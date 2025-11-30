@@ -71,7 +71,7 @@ def main_dqn_train_cpp():
 
 def main_my_agent():
     """Run my-agent (no render)"""
-    sys.argv = ["main.py", "selfplay", "my-agent"]
+    sys.argv = ["main.py", "selfplay", "my-agent", "--test", "--weights_file"]
     command_line_parser()
 
 def main_my_agent_render():
