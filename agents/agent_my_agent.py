@@ -24,7 +24,8 @@ class Player:
         big_blind,
         name,
         stack_size,
-        weights_file: str = None
+        weights_file: str = None,
+        num_update_passes: int = 1
     ):
         # Required by environment
         self.name = name
@@ -37,6 +38,7 @@ class Player:
         self.alpha = alpha
         self.gamma = gamma
         self.big_blind = big_blind
+        self.num_update_passes = num_update_passes
 
         # state-action history
         self.episode_history = []
@@ -120,6 +122,74 @@ class Player:
         self.epsilon = max(self.epsilon, 0.01)
 
 
+    def _compute_ev_reward(self, info: Dict, action: Action) -> float:
+        """
+        Computes an Expected Value (EV) based reward for a single action.
+        This includes special EV handling for FOLD and CHECK.
+        """
+        player = info["player_data"]
+        comm = info["community_data"]
+        stage_data = info["stage_data"]
+
+        position = player["position"]
+        equity = float(player["equity_to_river_alive"])
+        equity = max(0.0, min(1.0, equity))  # safety clamp
+
+        # Pot sizes
+        total_pot = float(comm["community_pot"]) + float(comm["current_round_pot"])
+
+        # Contribution / call sizes
+        if isinstance(stage_data, list):
+            current_stage = stage_data[-1]
+        elif isinstance(stage_data, dict):
+            current_stage = stage_data
+        else:
+            raise ValueError(f"Unexpected stage_data type: {type(stage_data)}")
+
+        min_call = current_stage["min_call_at_action"][position]
+        contribution = current_stage["contribution"][position]
+        cost_to_call = max(0.0, min_call - contribution)
+
+        # ───────────────────────────────────────────────
+        # 1. FOLD EV
+        # EV(fold) = 0 because folding locks in zero additional loss/gain
+        # ───────────────────────────────────────────────
+        if action == Action.FOLD:
+            return 0.0
+
+        # ───────────────────────────────────────────────
+        # 2. CHECK EV
+        # Check costs nothing; EV = equity × total_pot
+        # No expected loss term because cost_to_call = 0
+        # ───────────────────────────────────────────────
+        if action == Action.CHECK:
+            ev = equity * total_pot
+
+            # normalize + clip
+            ev /= self.big_blind
+            ev = np.clip(ev, -5, 5)
+            return ev
+
+        # ───────────────────────────────────────────────
+        # 3. CALL / RAISE EV
+        #
+        # EV = equity * win_amount − (1 − equity) * cost_to_call
+        #
+        # win_amount includes current pot + the additional amount you must call.
+        # ───────────────────────────────────────────────
+        win_amount = total_pot + cost_to_call
+
+        ev = (equity * win_amount) - ((1.0 - equity) * cost_to_call)
+
+        # Normalize by big blind to stabilize learning
+        ev /= self.big_blind
+
+        # Cap the EV to avoid reward explosions
+        ev = float(np.clip(ev, -5, 5))
+
+        return ev
+
+
     def _choose_greedy(self, legal_actions: List[Action], info: Dict) -> Action:
         features = self._extract_features(info)
         q_values = np.dot(features, self.weights)
@@ -127,70 +197,81 @@ class Player:
         return max(legal_q, key=lambda x: x[1])[0]
     
 
+    # Called by environment at the end of each episode
     def update(self, funds_history: pd.DataFrame, my_position: int):
         if len(self.episode_history) == 0:
             print("History is empty")
             return
+        
+        # NEW: Dictionary to accumulate TD errors across passes for each state-action index
+        cumulative_td_errors = {}  # key: state-action index, value: list of TD errors
 
-        hand_idx = 0
-        hand_td_errors = []  # Local accumulator for THIS hand
+        for pass_num in range(self.num_update_passes):
+            hand_idx = 0
+            hand_td_errors = []  # Local accumulator for THIS hand
 
-        for i, (info, action) in enumerate(self.episode_history):
+            for i, (info, action) in enumerate(self.episode_history):
 
-            if info is None and action is None:
-                if len(hand_td_errors) > 0:
-                    mean_mse = np.mean(np.square(hand_td_errors))
-                    self.hand_mean_squared_errors.append(mean_mse)
-                    hand_td_errors = []
-                hand_idx += 1
-                continue  # skip hand start markers
-            
-            if i + 1 == len(self.episode_history):
-                print("End of history reached")
-                break
-
-            next_info = self.episode_history[i + 1][0]
-            next_action = self.episode_history[i + 1][1]
-
-            # FIRST: Determine if this is last action of hand because a None placeholder is added at the start of each hand
-            is_last_action_in_hand = (next_info is None and next_action is None)
-
-            # Calculate reward
-            if is_last_action_in_hand:
-                if hand_idx >= len(funds_history):
-                    print(f"[Agent] WARNING: hand_idx {hand_idx} >= len(funds_history) {len(funds_history)}")
+                if info is None and action is None:
+                    if len(hand_td_errors) > 0:
+                        if pass_num == self.num_update_passes - 1:  # Only record on final pass
+                            mean_mse = np.mean(np.square(hand_td_errors))
+                            self.hand_mean_squared_errors.append(mean_mse)
+                        hand_td_errors = []
+                    hand_idx += 1
+                    continue  # skip hand start markers
+                
+                if i + 1 == len(self.episode_history):
+                    print("End of history reached")
                     break
 
-                start_of_hand_stack = funds_history.iloc[hand_idx].iloc[my_position]
-                if hand_idx + 1 < len(funds_history):
-                    end_of_hand_stack = funds_history.iloc[hand_idx + 1].iloc[my_position]
+                next_info = self.episode_history[i + 1][0]
+                next_action = self.episode_history[i + 1][1]
+
+                # FIRST: Determine if this is last action of hand because a None placeholder is added at the start of each hand
+                is_last_action_in_hand = (next_info is None and next_action is None)
+
+                # Calculate reward
+                if is_last_action_in_hand:
+                    if hand_idx >= len(funds_history):
+                        print(f"[Agent] WARNING: hand_idx {hand_idx} >= len(funds_history) {len(funds_history)}")
+                        break
+
+                    start_of_hand_stack = funds_history.iloc[hand_idx].iloc[my_position]
+                    if hand_idx + 1 < len(funds_history):
+                        end_of_hand_stack = funds_history.iloc[hand_idx + 1].iloc[my_position]
+                    else:
+                        end_of_hand_stack = self.initial_stack
+                        print("[Agent] WARNING: Using initial stack for end_of_hand_stack")
+
+                    terminal_reward = (end_of_hand_stack - start_of_hand_stack) / self.big_blind
+                    reward = np.tanh(terminal_reward / 3)  # Scale final reward
+
+                    if pass_num == self.num_update_passes - 1:
+                        print(f"[Agent] HAND END: hand_idx={hand_idx}, start={start_of_hand_stack}, end={end_of_hand_stack}, reward={reward}")
                 else:
-                    end_of_hand_stack = self.initial_stack
-                    print("[Agent] WARNING: Using initial stack for end_of_hand_stack")
-                    
-                terminal_reward = (end_of_hand_stack - start_of_hand_stack) / self.big_blind
-                reward = terminal_reward * 10  # Scale reward
+                    reward = self._compute_ev_reward(info, action)
 
-                print(f"[Agent] HAND END: hand_idx={hand_idx}, start={start_of_hand_stack}, end={end_of_hand_stack}, reward={reward}")
-            else:
-                equity_before = info['player_data']['equity_to_river_alive']
-                equity_after = next_info['player_data']['equity_to_river_alive']
-                equity_change = equity_after - equity_before
-                reward = equity_change * 5  # Scale intermediate reward
+                # SECOND: Perform Q-learning update (computes TD error)
+                self.num_updates += 1
+                td_error = self._q_learning_update(info, action, reward, next_info)
 
-                # Penalize negative equity changes more heavily to discourage poor actions
-                if equity_change < 0:
-                    reward *= 1.5
+                # NEW: Accumulate TD errors for this state-action pair
+                if i not in cumulative_td_errors:
+                    cumulative_td_errors[i] = []
+                cumulative_td_errors[i].append(td_error)
 
-            # SECOND: Perform Q-learning update (computes TD error)
-            self.num_updates += 1
-            td_error = self._q_learning_update(info, action, reward, next_info)
+                # THIRD: Collect the TD error that was just computed
+                hand_td_errors.append(td_error)
 
-            # THIRD: Collect the TD error that was just computed
-            hand_td_errors.append(td_error)
+                if pass_num == self.num_update_passes - 1:
+                    print(f"[Agent] Update {i}: Action={action}, Reward={reward}, TD Error={td_error:.4f}")
 
-            print(f"[Agent] Update {i}: Action={action}, Reward={reward}, TD Error={td_error:.4f}")
-
+        # NEW: After all passes, optionally log averaged TD errors
+        if self.num_update_passes > 1:
+            avg_td_errors = {idx: np.mean(errors) for idx, errors in cumulative_td_errors.items()}
+            print(f"[Agent] Completed {self.num_update_passes} passes. Avg TD errors across passes: {np.mean(list(avg_td_errors.values())):.4f}")
+            
         # if agents final stack is not zero, consider it a win
         self.game_wins += 1 if funds_history.iloc[-1].iloc[my_position] > 0 else 0
 
@@ -336,7 +417,7 @@ class Player:
         # Why: Captures how much you could win. Normalized to big blind for scale-invariance.
         #      Cap at 1.0 because anything > 100 BB in pot is "mega-pot" (same strategy applies)
         if total_pot > 0:
-            features[11] = min(total_pot / (self.big_blind * 100), 1.0)
+            features[11] = min(total_pot / (self.big_blind * 20), 1.0)
         else:
             features[11] = 0.0
 
@@ -373,7 +454,7 @@ class Player:
         #   - Low equity (0.2) + High pot odds (0.9 pot) = Negative (bad call)
         #   - Centered around 0 via (2*equity - 1) for symmetry
         equity_signal = 2 * equity - 1  # [-1, 1]
-        pot_odds_signal = min(total_pot / (self.big_blind * 50), 1.0)  # [0, 1]
+        pot_odds_signal = min(total_pot / (self.big_blind * 10), 1.0)  # [0, 1]
         features[14] = equity_signal - pot_odds_signal  # [-2, 1], then bounded
         features[14] = np.tanh(features[14])  # Bound to [-1, 1]
 
@@ -425,7 +506,7 @@ class Player:
     # =====================================================================
     # TRAINING METRICS AND VISUALIZATION
     # ====================================================================
-    def plot_td_error(self):
+    def plot_td_error(self, name: str = "td_error_progress.png"):
         import matplotlib.pyplot as plt
 
         if len(self.hand_mean_squared_errors) == 0:
@@ -447,7 +528,7 @@ class Player:
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.savefig("td_error_progress.png", dpi=150)
+        plt.savefig(name, dpi=150)
         print(f"Data points: {len(self.hand_mean_squared_errors)}, Window size: {window}")
         plt.show()
 

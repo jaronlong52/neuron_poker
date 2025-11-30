@@ -264,19 +264,20 @@ class SelfPlay:
 
         env_name = 'neuron_poker-v0'
 
-        self.stack = 10 # hard coded for simplicity
+        self.stack = 100 # hard coded for simplicity
         self.big_blind = 2
 
-        num_episodes = 100
+        num_episodes = 1000
 
         training_agent = MyAgent(
             epsilon=1.0,
             epsilon_decay=0.999,
-            alpha=0.005,
+            alpha=0.001,
             gamma=0.95,
             big_blind=self.big_blind,
             name="QAgent",
-            stack_size=self.stack
+            stack_size=self.stack,
+            num_update_passes=10
         )
 
         self.env = gym.make(env_name, initial_stacks=self.stack, small_blind=1, big_blind=self.big_blind, render=self.render, funds_plot=False)
@@ -317,10 +318,12 @@ class SelfPlay:
         print(f"Duration: {time_difference}")
         print(f"Agent Wins: {training_agent.game_wins} out of {num_episodes} games.")
 
-        training_agent.save_weights("my_agent_model_weights")
+        file_name = "weights_s100_bb2_epi1000_passes10_2"
+
+        training_agent.save_weights(file_name)
 
         # After game finishes, show training results
-        training_agent.plot_td_error()
+        training_agent.plot_td_error(file_name)
 
 
 if __name__ == '__main__':
