@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Tuple
 
 
 # Configuration
-FEATURE_SIZE = 16
+FEATURE_SIZE = 64
 NUM_ACTIONS = 8
 
 
@@ -89,16 +89,20 @@ class Player:
         if len(funds_history) > self.current_hand:
             self.current_hand = len(funds_history)
 
+        exploited = None
         action = None
         if not legal_actions:
             action = Action.FOLD
         elif np.random.random() < self.epsilon:
             action = np.random.choice(legal_actions)
+            exploited = False
         else:
             action = self._choose_greedy(legal_actions, info)
+            exploited = True
         
+        source_of_decision = "greedily" if exploited else "at random"
         # print action chosen out of legal actions
-        print(f"[Agent]  Chosen: {action.name},      Legal: {[a.name for a in legal_actions]}, Epsilon: {self.epsilon:.4f}")
+        print(f"[Agent]  Chosen: {action.name} ({source_of_decision}),                   Legal: {[a.name for a in legal_actions]}, Epsilon: {self.epsilon:.4f}")
 
         # to avoid reference bugs
         import copy
@@ -308,182 +312,403 @@ class Player:
 
     def _extract_features(self, info: Dict) -> np.ndarray:
         """
-        Extract features optimized for Q-learning in poker.
-
-        Design principles:
-        1. Each feature should represent ONE meaningful concept
-        2. Features should be normalized to similar scales (mainly [-1, 1] or [0, 1])
-        3. Non-linear relationships encoded via explicit feature expansion
-        4. No feature should be a linear combination of others (avoid multicollinearity)
-        5. All features should have non-zero variance during training
-
-        Total: 16 features
+        64-feature extractor using only PlayerData, StageData and CommunityData fields
+        exposed by the environment (no environment changes required).
         """
-        features = np.zeros(16, dtype=np.float64)
-        player_data = info['player_data']
-        community_data = info['community_data']
 
-        # =========================================================================
-        # SECTION 1: HAND STRENGTH (Features 0-2) - 3 features
-        # =========================================================================
-        # These capture the immediate quality of the decision point
+        import numpy as np
 
-        equity = player_data['equity_to_river_alive']
-        equity = 0.0 if np.isnan(equity) else float(equity)
-        equity = np.clip(equity, 0.0, 1.0)
+        # Short names for containers (info carries dicts created in env._get_environment)
+        player = info.get("player_data", {})
+        comm = info.get("community_data", {})
+        stage_data_list = info.get("stage_data", [])  # list of dicts (each StageData.__dict__)
 
-        # Feature 0: Raw equity [0, 1]
-        # Why: Direct measure of win probability. Linear relationship important.
-        features[0] = equity
+        # Initialize feature vector
+        features = np.zeros(64, dtype=np.float64)
+        i = 0  # feature index
 
-        # Feature 1: Equity squared [0, 1]
-        # Why: Creates non-linear separation. Distinguishes weak (0.3) vs strong (0.7) hands
-        #      Helps model learn that marginal improvements matter more at extremes
-        features[1] = equity ** 2
+        # ------------------------
+        # Helpers
+        # ------------------------
+        def safe_get(d, k, default=0.0):
+            return d.get(k, default) if isinstance(d, dict) else default
 
-        # Feature 2: Distance from 50-50 (centered) [-1, 1]
-        # Why: Different learning for equity above vs below break-even
-        #      Q-learner needs to differentiate when you're ahead (>0.5) vs behind (<0.5)
-        features[2] = 2 * equity - 1
+        def safe_list_get(lst, idx, default=0.0):
+            try:
+                return lst[idx]
+            except Exception:
+                return default
 
-        # =========================================================================
-        # SECTION 2: POSITION (Features 3-5) - 3 features
-        # =========================================================================
-        # Position fundamentally changes strategy in poker
+        def clip01(x):
+            return float(max(0.0, min(1.0, x)))
 
-        position = player_data['position']
-        num_players = player_data.get('num_players', 6)
+        def clipm1p1(x):
+            return float(max(-1.0, min(1.0, x)))
 
-        # Feature 3: Button indicator [0, 1]
-        # Why: Button is strongest position (last to act post-flop)
-        #      Binary indicator so Q-learner clearly sees this context
-        features[3] = 1.0 if position == (num_players - 1) else 0.0
+        def safe_float(x):
+            try:
+                return float(x)
+            except Exception:
+                return 0.0
 
-        # Feature 4: Blind indicator [0, 1]
-        # Why: Blinds are weakest position (act first post-flop)
-        #      Requires tighter play, different Q-values
-        features[4] = 1.0 if position in [0, 1] else 0.0
+        # ------------------------
+        # Basic available values (with safe defaults)
+        # ------------------------
+        position = int(safe_get(player, "position", 0))
+        num_players = int(safe_get(player, "num_players", len(safe_get(comm, "current_player_position", [])) or 6))
 
-        # Feature 5: Position continuous [-1, 1]
-        # Why: Captures gradual position strength even for middle positions
-        #      Maps button=1, small blind=-1, linearly interpolates middle
-        #      Helps model generalize to different player counts
-        position_ratio = (position - (num_players - 1)) / (num_players - 1)  # [-1, 0]
-        features[5] = position_ratio
+        # stacks: environment sets player_data.stack to list of stacks (normalized in env)
+        stacks = safe_get(player, "stack", None)
+        if stacks is None or not hasattr(stacks, "__len__"):
+            # fallback: assume even stacks
+            stacks = [1.0] * num_players
 
-        # =========================================================================
-        # SECTION 3: STACK DEPTH (Feature 6) - 1 feature
-        # =========================================================================
-        # Stack depth (in big blinds) determines bet sizing and fold equity
+        # equity values (may be NaN)
+        equity_alive = safe_float(safe_get(player, "equity_to_river_alive", 0.0))
+        if np.isnan(equity_alive):
+            equity_alive = 0.0
+        equity_2 = safe_float(safe_get(player, "equity_to_river_2plr", np.nan))
+        equity_3 = safe_float(safe_get(player, "equity_to_river_3plr", np.nan))
 
-        my_stack = player_data['stack'][position]
-        stack_bb = my_stack / self.big_blind
+        # community pot and current round pot (env normalizes these; use as-is)
+        community_pot = safe_float(safe_get(comm, "community_pot", 0.0))
+        current_round_pot = safe_float(safe_get(comm, "current_round_pot", 0.0))
+        total_pot = community_pot + current_round_pot + 1e-9
 
-        # Feature 6: Effective stack depth [-1, 1]
-        # Why: Log scale captures both shallow (1-10 BB) and deep (100+ BB) stacks
-        #      Tanh keeps it bounded, prevents extreme values from dominating updates
-        #      Log1p handles edge case of 0 stack
-        # 
-        # Reasoning:
-        #   - 1 BB: log(2) / 5 ≈ 0.14 (very short, all-in likely)
-        #   - 10 BB: log(11) / 5 ≈ 0.50 (medium, limited maneuverability)
-        #   - 50 BB: log(51) / 5 ≈ 0.82 (deep, full strategy)
-        #   - 200+ BB: tanh caps it near 1.0
-        features[6] = np.tanh(np.log1p(stack_bb) / 5.0)
+        big_blind = safe_float(safe_get(comm, "big_blind", getattr(self, "big_blind", 1.0)))
+        small_blind = safe_float(safe_get(comm, "small_blind", getattr(self, "small_blind", 0.5)))
 
-        # =========================================================================
-        # SECTION 4: GAME STAGE (Features 7-10) - 4 features (one-hot)
-        # =========================================================================
-        # Strategy fundamentally different at each stage
+        # legal moves (list of booleans in comm)
+        legal_moves = safe_get(comm, "legal_moves", [])
 
-        stage_one_hot = community_data['stage']  # [pre-flop, flop, turn, river]
-        stage_idx = int(np.argmax(stage_one_hot))
+        # active players mask (list of booleans)
+        active_players_mask = safe_get(comm, "active_players", [True] * num_players)
+        active_count = sum(1 for x in active_players_mask if x)
 
-        # Features 7-10: One-hot encoded stage
-        # Why: One-hot prevents artificial ordering (pre-flop < flop < turn < river)
-        #      Allows Q-learner to assign completely independent strategies per stage
-        for i in range(4):
-            features[7 + i] = 1.0 if stage_idx == i else 0.0
+        # stage one-hot vector
+        stage_onehot = safe_get(comm, "stage", [0.0, 0.0, 0.0, 0.0])
+        stage_idx = int(np.argmax(stage_onehot)) if any(stage_onehot) else 0
 
-        # =========================================================================
-        # SECTION 5: POT & ODDS (Features 11-13) - 3 features
-        # =========================================================================
-        # Decision value comes from pot odds vs equity
+        # stage_data_list is a list of dicts from env._get_environment()
+        # Each stage_data dict should contain keys: calls, raises, min_call_at_action, contribution, stack_at_action, community_pot_at_action
+        # We'll aggregate across relevant entries safely.
+        # ------------------------
+        # A. Equity & hand-strength proxies (8)
+        # ------------------------
+        # 0. raw equity [0,1]
+        features[i] = clip01(equity_alive); i += 1
 
-        c_pot = float(community_data['community_pot'])
-        r_pot = float(community_data['current_round_pot'])
-        total_pot = c_pot + r_pot
+        # 1. equity squared [0,1]
+        features[i] = clip01(equity_alive * equity_alive); i += 1
 
-        # Feature 11: Pot odds (total pot relative to big blind) [0, 1]
-        # Why: Captures how much you could win. Normalized to big blind for scale-invariance.
-        #      Cap at 1.0 because anything > 100 BB in pot is "mega-pot" (same strategy applies)
-        if total_pot > 0:
-            features[11] = min(total_pot / (self.big_blind * 20), 1.0)
-        else:
-            features[11] = 0.0
+        # 2. centered equity [-1,1]
+        features[i] = clipm1p1(2.0 * equity_alive - 1.0); i += 1
 
-        # Feature 12: Round pot ratio [0, 1]
-        # Why: Tells you if money recently went in this round (high r_pot) vs accumulated (high c_pot)
-        #      Recent aggression changes equity interpretation
-        if total_pot > 0:
-            features[12] = r_pot / (total_pot + 1e-6)
-        else:
-            features[12] = 0.5  # If no pot yet, neutral value
+        # 3. two-player equity if available else same as alive
+        features[i] = clip01(0.0 if np.isnan(equity_2) else equity_2) ; i += 1
 
-        # Feature 13: Pot growth indicator [-1, 1]
-        # Why: Compares community pot to round pot. High ratio means pots building gradually.
-        #      Low ratio means current round is aggressive. Signals opponent behavior.
-        if total_pot > 0:
-            ratio = c_pot / (r_pot + 1e-6)
-            # log transform: log(2) ≈ 0.7, log(0.5) ≈ -0.7
-            # Centers around 0, bounds with tanh
-            features[13] = np.tanh(np.log1p(ratio) / 3.0)
-        else:
-            features[13] = 0.0
+        # 4. three-player equity if available else same as alive
+        features[i] = clip01(0.0 if np.isnan(equity_3) else equity_3); i += 1
 
-        # =========================================================================
-        # SECTION 6: EQUITY vs POT INTERACTION (Feature 14) - 1 feature
-        # =========================================================================
-        # Combine equity and pot odds into single "value signal"
+        # 5. binary strong equity flag (above 0.66)
+        features[i] = 1.0 if equity_alive > 0.66 else 0.0; i += 1
 
-        # Feature 14: Equity vs pot odds [-1, 1]
-        # Why: Q-learner needs to know if equity justifies the pot odds
-        #      This is the core EV calculation: compare hand strength to risk
-        # 
-        # Calculation: 
-        #   - High equity (0.8) + Low pot odds (0.1 pot) = Positive (good call)
-        #   - Low equity (0.2) + High pot odds (0.9 pot) = Negative (bad call)
-        #   - Centered around 0 via (2*equity - 1) for symmetry
-        equity_signal = 2 * equity - 1  # [-1, 1]
-        pot_odds_signal = min(total_pot / (self.big_blind * 10), 1.0)  # [0, 1]
-        features[14] = equity_signal - pot_odds_signal  # [-2, 1], then bounded
-        features[14] = np.tanh(features[14])  # Bound to [-1, 1]
+        # 6. binary weak equity flag (below 0.33)
+        features[i] = 1.0 if equity_alive < 0.33 else 0.0; i += 1
 
-        # =========================================================================
-        # SECTION 7: BIAS (Feature 15) - 1 feature
-        # =========================================================================
-        # Allows model to learn baseline action preferences
-        features[15] = 1.0
+        # 7. draw-proxy: if equity between 0.33 and 0.66 (possible draw)
+        features[i] = 1.0 if 0.33 <= equity_alive <= 0.66 else 0.0; i += 1
+
+        # ------------------------
+        # B. Position features (6)
+        # ------------------------
+        # 8. is button
+        features[i] = 1.0 if position == (num_players - 1) else 0.0; i += 1
+
+        # 9. is in blinds (SB or BB)
+        features[i] = 1.0 if position in (0, 1) else 0.0; i += 1
+
+        # 10. position normalized [0,1]
+        features[i] = position / max(1, (num_players - 1)); i += 1
+
+        # 11. position centered [-1,1]
+        features[i] = (position / max(1, (num_players - 1))) * 2.0 - 1.0; i += 1
+
+        # 12. players behind normalized [0,1]
+        features[i] = (num_players - 1 - position) / max(1, (num_players - 1)); i += 1
+
+        # 13. players ahead normalized [0,1]
+        features[i] = position / max(1, (num_players - 1)); i += 1
+
+        # ------------------------
+        # C. Stack & pot geometry (8)
+        # ------------------------
+        # stack for this agent (note: env previously normalized stacks to big_blind * 100; use as given)
+        my_stack = safe_float(safe_list_get(stacks, position, 0.0))
+
+        # 14. stack proxy (log1p then tanh)
+        features[i] = clipm1p1(np.tanh(np.log1p(my_stack + 1e-9) / 5.0)); i += 1
+
+        # 15. stack normalized by average stack
+        avg_stack = sum(safe_float(s) for s in stacks) / max(1, len(stacks))
+        features[i] = clip01(my_stack / (avg_stack + 1e-9)); i += 1
+
+        # 16. stack / total_pot (shows commitment level)
+        features[i] = clip01(my_stack / (total_pot + 1e-9)); i += 1
+
+        # 17. stack-to-pot ratio (SPR) proxy (bounded)
+        features[i] = clipm1p1(np.tanh(np.log1p((my_stack + 1e-9) / (total_pot + 1e-9)) / 2.0)); i += 1
+
+        # 18. max opponent stack normalized vs my stack (threat)
+        opp_max_stack = max([safe_float(s) for idx, s in enumerate(stacks) if idx != position] or [0.0])
+        features[i] = clip01(opp_max_stack / (my_stack + 1e-9)); i += 1
+
+        # 19. min opponent stack normalized vs my stack
+        opp_min_stack = min([safe_float(s) for idx, s in enumerate(stacks) if idx != position] or [my_stack])
+        features[i] = clip01(opp_min_stack / (my_stack + 1e-9)); i += 1
+
+        # 20. stddev of stacks normalized
+        try:
+            features[i] = clip01(np.std(np.array([float(s) for s in stacks])) / (np.mean(np.array([float(s) for s in stacks])) + 1e-9))
+        except Exception:
+            features[i] = 0.0
+        i += 1
+
+        # ------------------------
+        # D. Pot odds & call cost proxies (6)
+        # ------------------------
+        # Determine cost_to_call from current stage_data entry (use latest relevant entry if present)
+        cost_to_call = 0.0
+        my_contribution = 0.0
+        # stage_data_list is a list of stage snapshots; choose the most recent (last) for best approximation
+        if isinstance(stage_data_list, (list, tuple)) and len(stage_data_list) > 0:
+            latest_stage = stage_data_list[-1]
+            # latest_stage expected keys: min_call_at_action, contribution
+            min_call_list = latest_stage.get("min_call_at_action", None)
+            contrib_list = latest_stage.get("contribution", None)
+            if min_call_list is not None and contrib_list is not None:
+                try:
+                    min_call = safe_float(min_call_list[position])
+                    my_contribution = safe_float(contrib_list[position])
+                    cost_to_call = max(0.0, min_call - my_contribution)
+                except Exception:
+                    cost_to_call = 0.0
+                    my_contribution = 0.0
+        # 21. cost_to_call normalized by total pot
+        features[i] = clip01(cost_to_call / (total_pot + 1e-9)); i += 1
+
+        # 22. pot odds (cost / (pot + cost))
+        features[i] = clip01(cost_to_call / (total_pot + cost_to_call + 1e-9)); i += 1
+
+        # 23. call fraction vs my stack
+        features[i] = clip01(cost_to_call / (my_stack + 1e-9)); i += 1
+
+        # 24. my contribution / total pot
+        features[i] = clip01(my_contribution / (total_pot + 1e-9)); i += 1
+
+        # 25. normalized current round pot
+        features[i] = clip01(current_round_pot / (max(1.0, big_blind) * 100.0 + 1e-9)); i += 1
+
+        # ------------------------
+        # E. Stage & recent action aggregates (8)
+        # ------------------------
+        # 26-29 one-hot stage (preflop, flop, turn, river)
+        for s in range(4):
+            features[i] = 1.0 if stage_idx == s else 0.0
+            i += 1
+
+        # aggregate calls/raises across the entire stage_data_list to produce history
+        total_calls = 0
+        total_raises = 0
+        total_contrib = 0.0
+        total_mincall = 0.0
+        entries_count = 0
+        for sd in stage_data_list:
+            try:
+                calls = sd.get("calls", [])
+                raises = sd.get("raises", [])
+                contribs = sd.get("contribution", [])
+                mincalls = sd.get("min_call_at_action", [])
+                total_calls += sum(1 for x in calls if x)
+                total_raises += sum(1 for x in raises if x)
+                total_contrib += sum([safe_float(x) for x in contribs]) if contribs else 0.0
+                total_mincall += sum([safe_float(x) for x in mincalls]) if mincalls else 0.0
+                entries_count += 1
+            except Exception:
+                continue
+
+        # 30. total calls normalized
+        features[i] = clip01(total_calls / (num_players * max(1, entries_count))); i += 1
+        # 31. total raises normalized
+        features[i] = clip01(total_raises / (num_players * max(1, entries_count))); i += 1
+        # 32. avg contribution per entry normalized by total_pot
+        features[i] = clip01((total_contrib / max(1, entries_count)) / (total_pot + 1e-9)); i += 1
+        # 33. avg min_call seen normalized
+        features[i] = clip01((total_mincall / max(1, entries_count)) / (max(1.0, big_blind) * 100.0)); i += 1
+
+        # 34. recent aggression flag (any raises anywhere)
+        features[i] = 1.0 if total_raises > 0 else 0.0; i += 1
+
+        # 35. recent calling flag
+        features[i] = 1.0 if total_calls > 0 else 0.0; i += 1
+
+        # 36. round pot ratio: current_round_pot / total_pot
+        features[i] = clip01(current_round_pot / (total_pot + 1e-9)); i += 1
+
+        # ------------------------
+        # F. Active players & simple opponent proxies (8)
+        # ------------------------
+        # 37. active player count (normalized)
+        features[i] = clip01(active_count / float(num_players)); i += 1
+
+        # 38. folded count normalized
+        features[i] = clip01((num_players - active_count) / float(num_players)); i += 1
+
+        # 39. fraction of opponents with stack < my_stack (short stacks)
+        shorter_count = sum(1 for idx, s in enumerate(stacks) if idx != position and safe_float(s) < my_stack)
+        features[i] = clip01(shorter_count / max(1, (num_players - 1))); i += 1
+
+        # 40. fraction of opponents with stack > my_stack (big stacks)
+        bigger_count = sum(1 for idx, s in enumerate(stacks) if idx != position and safe_float(s) > my_stack)
+        features[i] = clip01(bigger_count / max(1, (num_players - 1))); i += 1
+
+        # 41. average opponent stack normalized by my stack
+        opp_stacks = [safe_float(s) for idx, s in enumerate(stacks) if idx != position]
+        avg_opp_stack = (sum(opp_stacks) / max(1, len(opp_stacks))) if opp_stacks else my_stack
+        features[i] = clip01(avg_opp_stack / (my_stack + 1e-9)); i += 1
+
+        # 42. max opponent stack normalized
+        features[i] = clip01((max(opp_stacks) if opp_stacks else my_stack) / (my_stack + 1e-9)); i += 1
+
+        # 43. opponent stack std dev normalized by mean
+        try:
+            features[i] = clip01(np.std(np.array(opp_stacks)) / (np.mean(np.array(opp_stacks)) + 1e-9)) if opp_stacks else 0.0
+        except Exception:
+            features[i] = 0.0
+        i += 1
+
+        # 44. threat indicator: max_opp_stack / total_pot (how much opponent can commit)
+        features[i] = clip01((max(opp_stacks) if opp_stacks else 0.0) / (total_pot + 1e-9)); i += 1
+
+        # ------------------------
+        # G. Legal-move and action-affordance features (8)
+        # ------------------------
+        # Use comm['legal_moves'] (list indexed by Action enum) — environment sets it earlier
+        # We'll try to be robust: check for items by name if possible otherwise fallback to common indices
+        lm = legal_moves if isinstance(legal_moves, (list, tuple)) else []
+
+        # Helper to map by presence (some envs use booleans list)
+        # We'll create a few intuitive flags: can_call, can_check, can_raise_3bb, can_all_in
+        can_call = False
+        can_check = False
+        can_raise_3bb = False
+        can_all_in = False
+
+        try:
+            # If list of booleans aligned with Action enum, we can detect by index
+            # Fallback: search for string names (some envs might store names)
+            # As a robust approach, treat truthy elements as "some legal moves exist" and look for likely positions:
+            # - If length >= 3, assume indices for CALL/CHECK/ALL_IN exist; use heuristic
+            if len(lm) >= 1:
+                # heuristic: CALL is often present when not max pot contributor
+                can_call = bool(lm[Action.CALL.value]) if len(lm) > Action.CALL.value else any(lm)
+            if len(lm) > Action.CHECK.value:
+                can_check = bool(lm[Action.CHECK.value]) if len(lm) > Action.CHECK.value else False
+            # RAISE_3BB and ALL_IN detection
+            if len(lm) > Action.RAISE_3BB.value:
+                can_raise_3bb = bool(lm[Action.RAISE_3BB.value])
+            if len(lm) > Action.ALL_IN.value:
+                can_all_in = bool(lm[Action.ALL_IN.value])
+        except Exception:
+            # best-effort fallback
+            can_call = any(lm)
+            can_check = False
+            can_raise_3bb = False
+            can_all_in = True if lm else False
+
+        features[i] = 1.0 if can_call else 0.0; i += 1
+        features[i] = 1.0 if can_check else 0.0; i += 1
+        features[i] = 1.0 if can_raise_3bb else 0.0; i += 1
+        features[i] = 1.0 if can_all_in else 0.0; i += 1
+
+        # 49. number of legal moves normalized
+        features[i] = clip01(len([x for x in lm if x]) / max(1, len(lm))); i += 1
+
+        # 50. availability of any raise option (heuristic)
+        features[i] = 1.0 if can_raise_3bb or can_all_in else 0.0; i += 1
+
+        # 51. afford_allin_by_stack flag (1 if my_stack > 0)
+        features[i] = 1.0 if my_stack > 0 else 0.0; i += 1
+
+        # ------------------------
+        # H. Derived ratios & misc (12)
+        # ------------------------
+        # 52. pot normalized (community + round) relative to big blind baseline
+        features[i] = clip01((community_pot + current_round_pot) / (max(1.0, big_blind) * 20.0)); i += 1
+
+        # 53. current_round_pot normalized by big blind
+        features[i] = clip01(current_round_pot / (max(1.0, big_blind) * 20.0)); i += 1
+
+        # 54. community_pot normalized by big blind
+        features[i] = clip01(community_pot / (max(1.0, big_blind) * 20.0)); i += 1
+
+        # 55. my stack as fraction of total stacks
+        features[i] = clip01(my_stack / (sum(safe_float(s) for s in stacks) + 1e-9)); i += 1
+
+        # 56. fraction of pot I currently own (my_contribution / total_pot)
+        features[i] = clip01(my_contribution / (total_pot + 1e-9)); i += 1
+
+        # 57. normalized difference: (equity - pot_odds)
+        pot_odds = cost_to_call / (total_pot + cost_to_call + 1e-9)
+        features[i] = clipm1p1((equity_alive - pot_odds)); i += 1
+
+        # 58. "pressure" indicator : how big current_round_pot relative to average player stack
+        avg_stack_safe = max(1e-9, avg_stack)
+        features[i] = clip01(current_round_pot / (avg_stack_safe + 1e-9)); i += 1
+
+        # 59. normalized min_call at my action if available
+        min_call_list = None
+        if isinstance(stage_data_list, (list, tuple)) and len(stage_data_list) > 0:
+            try:
+                min_call_list = stage_data_list[-1].get("min_call_at_action", None)
+            except Exception:
+                min_call_list = None
+        min_call_here = safe_float(safe_list_get(min_call_list, position, 0.0)) if min_call_list is not None else 0.0
+        features[i] = clip01(min_call_here / (max(1.0, big_blind) * 20.0)); i += 1
+
+        # 60. fraction of stages (entries) where raises appeared (aggression_history)
+        raise_entries = 0
+        for sd in stage_data_list:
+            try:
+                raise_entries += 1 if any(sd.get("raises", [])) else 0
+            except Exception:
+                pass
+        features[i] = clip01(raise_entries / max(1, len(stage_data_list))); i += 1
+
+        # 61. fraction of stages where calls appeared
+        call_entries = 0
+        for sd in stage_data_list:
+            try:
+                call_entries += 1 if any(sd.get("calls", [])) else 0
+            except Exception:
+                pass
+        features[i] = clip01(call_entries / max(1, len(stage_data_list))); i += 1
+
+        # 62. tendency to have high min_call historically (avg min_call / big_blind baseline)
+        historical_min_calls = []
+        for sd in stage_data_list:
+            try:
+                mlist = sd.get("min_call_at_action", [])
+                historical_min_calls.append(np.mean([safe_float(x) for x in mlist]) if mlist else 0.0)
+            except Exception:
+                historical_min_calls.append(0.0)
+        avg_min_call_hist = np.mean(historical_min_calls) if historical_min_calls else 0.0
+        features[i] = clip01(avg_min_call_hist / (max(1.0, big_blind) * 20.0)); i += 1
+
+        # 63. simple hand-agnostic "conservative" flag: true if many players still active and my stack is small
+        features[i] = 1.0 if (active_count > max(2, num_players // 2) and my_stack < avg_stack) else 0.0; i += 1
 
         return features
-
-        # =========================================================================
-        # SUMMARY
-        # =========================================================================
-        # Total: 16 features
-        # 
-        # Feature Scale Distribution:
-        #   - Most features in [-1, 1]: promotes stable gradient updates
-        #   - No feature correlates strongly with others (except equity/equity^2)
-        #   - Each feature has meaningful variance during gameplay
-        #
-        # Learning Properties:
-        #   - Clear EV signals (Feature 14 combines equity and pot odds)
-        #   - Stage-based strategy separation (Features 7-10)
-        #   - Position context (Features 3-5)
-        #   - Stack constraints (Feature 6)
-        #   - Non-linear hand strength separation (Features 1, 2)
-        #   - Opponent aggression signals (Features 12-13)
 
 
     # =====================================================================

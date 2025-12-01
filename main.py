@@ -349,9 +349,9 @@ class SelfPlay:
         num_episodes = 1000
 
         # Name of the file to save weights to after training
-        save_weights_to_file = "weights_s100_bb2_epi1000_passes1"
+        save_weights_to_file = "weights_s100_bb2_epi1000_passes3_featuresV2"
         # Name of the file to save plotted results to after training
-        save_plot_to_file = "td_error_s100_bb2_epi1000_passes1"
+        save_plot_to_file = "td_error_s100_bb2_epi1000_passes3_featuresV2"
 
         training_agent = MyAgent(
             epsilon=1.0,
@@ -361,19 +361,19 @@ class SelfPlay:
             big_blind=self.big_blind,
             name="QAgent",
             stack_size=self.stack,
-            num_update_passes=10
+            num_update_passes=3
         )
 
         self.env = gym.make(env_name, initial_stacks=self.stack, small_blind=1, big_blind=self.big_blind, render=self.render, funds_plot=False)
 
         # Add players via unwrapped
         self.env.unwrapped.add_player(training_agent)
-        for i in range(2):
-            self.env.unwrapped.add_player(RandomPlayer(name=f'Random_{i+1}'))
-
+        
         self.env.unwrapped.add_player(EquityPlayer(name='equity/20/30', min_call_equity=.2, min_bet_equity=-.3))
+        self.env.unwrapped.add_player(RandomPlayer(name=f'Random_1'))
         self.env.unwrapped.add_player(EquityPlayer(name='equity/50/50', min_call_equity=.5, min_bet_equity=-.5))
         self.env.unwrapped.add_player(EquityPlayer(name='equity/50/80', min_call_equity=.8, min_bet_equity=-.8))
+        self.env.unwrapped.add_player(RandomPlayer(name=f'Random_2'))
         self.env.unwrapped.add_player(EquityPlayer(name='equity/70/70', min_call_equity=.7, min_bet_equity=-.7))
 
         # -------------------------
