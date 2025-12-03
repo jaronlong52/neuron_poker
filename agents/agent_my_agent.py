@@ -25,7 +25,8 @@ class Player:
         name,
         stack_size,
         weights_file: str = None,
-        num_update_passes: int = 1
+        num_update_passes: int = 1,
+        isNotLearning: bool = True,
     ):
         # Required by environment
         self.name = name
@@ -39,6 +40,8 @@ class Player:
         self.gamma = gamma
         self.big_blind = big_blind
         self.num_update_passes = num_update_passes
+
+        self.isNotLearning = isNotLearning
 
         # state-action history
         self.episode_history = []
@@ -75,7 +78,10 @@ class Player:
         else:
             self.weights = np.random.uniform(-0.1, 0.1, (FEATURE_SIZE, NUM_ACTIONS))
 
-        print(f"[Agent] Initialized weights: {self.weights.shape}")
+        if self.isNotLearning:
+            print(f"[Old Model] Initialized weights: {self.weights.shape}")
+        else:
+            print(f"[Agent] Initialized weights: {self.weights.shape}")
 
     # =====================================================================
     # CORE METHODS
@@ -93,6 +99,10 @@ class Player:
         action = None
         if not legal_actions:
             action = Action.FOLD
+        elif self.isNotLearning:
+            action = self._choose_greedy(legal_actions, info)
+            exploited = True
+            return action
         elif np.random.random() < self.epsilon:
             action = np.random.choice(legal_actions)
             exploited = False
@@ -248,6 +258,11 @@ class Player:
 
     # Called by environment at the end of each episode
     def update(self, funds_history: pd.DataFrame, my_position: int):
+        if self.isNotLearning:
+            self.episode_history = []
+            self.num_actions = 0
+            return
+
         if len(self.episode_history) == 0:
             print("History is empty")
             return

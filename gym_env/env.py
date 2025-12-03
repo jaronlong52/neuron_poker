@@ -460,6 +460,11 @@ class HoldemTable(Env):
         if remaining_players < 2:
             self._game_over()
             return True
+        
+        if self.players[0].stack == 0: # End game if my agent lost
+            self._game_over()
+            print("============== Early termination: Agent lost all its money. ==============")
+            return True
         return False
 
     def _game_over(self):
