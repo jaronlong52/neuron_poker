@@ -102,7 +102,6 @@ class Player:
         elif self.isNotLearning:
             action = self._choose_greedy(legal_actions, info)
             exploited = True
-            return action
         elif np.random.random() < self.epsilon:
             action = np.random.choice(legal_actions)
             exploited = False
@@ -259,7 +258,6 @@ class Player:
     # Called by environment at the end of each episode
     def update(self, funds_history: pd.DataFrame, my_position: int):
         if self.isNotLearning:
-            self.episode_history = []
             self.num_actions = 0
             return
 

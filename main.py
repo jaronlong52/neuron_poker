@@ -262,79 +262,115 @@ class SelfPlay:
 
     def my_agent_test(self, agent, weights_path, save_file="temp_name", test_episodes=100):
         """
-        Test the agent with epsilon = 0 using loaded weights.
+        Test the agent using loaded weights.
         Tracks win counts and produces a bar graph.
         """
         import matplotlib.pyplot as plt
 
-        # Load trained weights
+        # Load trained weights and configure for testing
         agent.load_weights(weights_path)
-        agent.epsilon = 0.0  # no exploration during testing
+        agent.isNotLearning = True  # Disable learning during testing
+        agent.epsilon = 0.0      # Disable exploration
 
         # Track wins per player
         player_names = [p.name for p in self.env.unwrapped.players]
         win_counts = {name: 0 for name in player_names}
 
+        # Additional metrics
+        total_rewards = {name: 0.0 for name in player_names}
+        episode_lengths = []
+
+        print("### Starting Testing Phase ###")
+        start_time = datetime.now()
+
         for ep in range(test_episodes):
-            print(f"[TEST] Episode {ep+1}/{test_episodes}")
+            print(f"[TEST] Episode {ep + 1}/{test_episodes}")
 
-            print("$$ Starting testing...")
-            start_time = datetime.now()
+            # Reset environment - this runs the entire episode
+            self.env.reset()
 
-            for ep in range(test_episodes):
-                print(f"$$ Episode {ep + 1}/{test_episodes}")
-                self.env.reset()
-                agent.num_actions = 0
-                agent.num_updates = 0
-                agent.num_markers = 0
-                agent.episode_history = []
-
-                # --- Get final funds from agent episode_history ---
-                valid_steps = [step for step in agent.episode_history if step[0] is not None]
-
-                if len(valid_steps) == 0:
-                    print("[TEST] ERROR: episode_history empty — cannot determine winner.")
-                    continue
+            # Get final results from the completed episode
+            if len(agent.episode_history) == 0:
+                print(f"[TEST] WARNING: Episode {ep + 1} - episode_history empty, skipping...")
+                continue
+            
+            # Find the last non-marker entry in history
+            last_info = None
+            for info, _ in reversed(agent.episode_history):
+                if info is not None:
+                    last_info = info
+                    break
                 
-                last_info = valid_steps[-1][0]
+            if last_info is None:
+                print(f"[TEST] WARNING: Episode {ep + 1} - no valid info in history, skipping...")
+                continue
+            agent.episode_history = []  # Clear history for next episode
 
-                # Extract stacks depending on how they are named
-                if "player_funds" in last_info:
-                    final_funds = np.array(last_info["player_funds"])
-                elif "stacks" in last_info:
-                    final_funds = np.array(last_info["stacks"])
-                elif "player_funds_at_action" in last_info:
-                    final_funds = np.array(last_info["player_funds_at_action"])
-                else:
-                    raise ValueError("[TEST] Could not find stack information in last_info")
-                
-                winner_index = final_funds.argmax()
-                winner_name = player_names[winner_index]
-                win_counts[winner_name] += 1
+            # Extract final stacks from player_data
+            player_data = last_info['player_data']
+            final_funds = np.array(player_data['stack']) * (self.big_blind * 100)
+            
+            # Determine winner and update metrics
+            winner_index = final_funds.argmax()
+            winner_name = player_names[winner_index]
+            win_counts[winner_name] += 1
 
-        print("$$ Testing finished.")
+            # Track total funds for each player
+            for i, name in enumerate(player_names):
+                total_rewards[name] += final_funds[i]
+
+            # Count actual actions (exclude markers)
+            action_count = sum(1 for info, _ in agent.episode_history if info is not None)
+            episode_lengths.append(action_count)
+
+        print("\n### Testing Finished ###")
         end_time = datetime.now()
-
         time_difference = end_time - start_time
+
         print(f"Start time: {start_time}")
         print(f"End time: {end_time}")
         print(f"Duration: {time_difference}")
+        print(f"Average episode length: {np.mean(episode_lengths):.2f} actions")
 
         print("\n### TEST RESULTS ###")
-        for name, count in win_counts.items():
-            print(f"{name}: {count} wins")
+        valid_episodes = sum(win_counts.values())
+        print(f"Valid episodes: {valid_episodes}/{test_episodes}")
 
-        # --------- Bar Graph Visualization ---------
-        plt.figure(figsize=(10, 6))
-        plt.bar(win_counts.keys(), win_counts.values())
-        plt.title("Agent vs Random Players — Test Win Counts")
-        plt.xlabel("Player")
-        plt.ylabel("Wins")
-        plt.xticks(rotation=45)
+        for name in player_names:
+            wins = win_counts[name]
+            win_rate = (wins / valid_episodes * 100) if valid_episodes > 0 else 0
+            avg_funds = total_rewards[name] / valid_episodes if valid_episodes > 0 else 0
+            print(f"{name}: {wins} wins ({win_rate:.1f}%) | Avg final funds: {avg_funds:.2f}")
+
+        # --------- Visualization ---------
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+
+        # Win counts bar chart
+        ax1.bar(win_counts.keys(), win_counts.values(), color='steelblue', alpha=0.8)
+        ax1.set_title("Test Win Counts", fontsize=14, fontweight='bold')
+        ax1.set_xlabel("Player")
+        ax1.set_ylabel("Wins")
+        ax1.tick_params(axis='x', rotation=45)
+        ax1.grid(axis='y', alpha=0.3)
+
+        # Average final funds bar chart
+        avg_funds_dict = {name: total_rewards[name] / valid_episodes if valid_episodes > 0 else 0 
+                          for name in player_names}
+        ax2.bar(avg_funds_dict.keys(), avg_funds_dict.values(), color='coral', alpha=0.8)
+        ax2.set_title("Average Final Funds", fontsize=14, fontweight='bold')
+        ax2.set_xlabel("Player")
+        ax2.set_ylabel("Average Funds")
+        ax2.tick_params(axis='x', rotation=45)
+        ax2.axhline(y=self.stack, color='red', linestyle='--', label=f'Starting stack ({self.stack})')
+        ax2.legend()
+        ax2.grid(axis='y', alpha=0.3)
+
         plt.tight_layout()
-        save_file += "_test_results"
+        save_file += "_test_results.png"
         plt.savefig(save_file, dpi=150)
+        print(f"\nPlot saved to: {save_file}")
         plt.show()
+
 
     def my_agent_play(self, test_mode=False, weights_file=None):
         """1 MyAgent vs 5 random"""
