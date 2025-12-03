@@ -260,7 +260,7 @@ class SelfPlay:
         print(league_table)
         print(f"Best Player: {best_player}")
 
-    def my_agent_test(self, agent, weights_path, save_file="temp_name", test_episodes=100):
+    def my_agent_test(self, agent, weights_path, save_file="temp_name", test_episodes=200):
         """
         Test the agent using loaded weights.
         Tracks win counts and produces a bar graph.
@@ -336,34 +336,16 @@ class SelfPlay:
         valid_episodes = sum(win_counts.values())
         print(f"Valid episodes: {valid_episodes}/{test_episodes}")
 
-        for name in player_names:
-            wins = win_counts[name]
-            win_rate = (wins / valid_episodes * 100) if valid_episodes > 0 else 0
-            avg_funds = total_rewards[name] / valid_episodes if valid_episodes > 0 else 0
-            print(f"{name}: {wins} wins ({win_rate:.1f}%) | Avg final funds: {avg_funds:.2f}")
-
         # --------- Visualization ---------
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6))
+        fig, ax = plt.subplots(figsize=(10, 6))
 
         # Win counts bar chart
-        ax1.bar(win_counts.keys(), win_counts.values(), color='steelblue', alpha=0.8)
-        ax1.set_title("Test Win Counts", fontsize=14, fontweight='bold')
-        ax1.set_xlabel("Player")
-        ax1.set_ylabel("Wins")
-        ax1.tick_params(axis='x', rotation=45)
-        ax1.grid(axis='y', alpha=0.3)
-
-        # Average final funds bar chart
-        avg_funds_dict = {name: total_rewards[name] / valid_episodes if valid_episodes > 0 else 0 
-                          for name in player_names}
-        ax2.bar(avg_funds_dict.keys(), avg_funds_dict.values(), color='coral', alpha=0.8)
-        ax2.set_title("Average Final Funds", fontsize=14, fontweight='bold')
-        ax2.set_xlabel("Player")
-        ax2.set_ylabel("Average Funds")
-        ax2.tick_params(axis='x', rotation=45)
-        ax2.axhline(y=self.stack, color='red', linestyle='--', label=f'Starting stack ({self.stack})')
-        ax2.legend()
-        ax2.grid(axis='y', alpha=0.3)
+        ax.bar(win_counts.keys(), win_counts.values(), color='steelblue', alpha=0.8)
+        ax.set_title("Test Win Counts", fontsize=14, fontweight='bold')
+        ax.set_xlabel("Player")
+        ax.set_ylabel("Wins")
+        ax.tick_params(axis='x', rotation=45)
+        ax.grid(axis='y', alpha=0.3)
 
         plt.tight_layout()
         save_file += "_test_results.png"
@@ -407,6 +389,39 @@ class SelfPlay:
         self.env = gym.make(env_name, initial_stacks=self.stack, small_blind=1, big_blind=self.big_blind, render=self.render, funds_plot=False)
 
         # Add players via unwrapped
+        last_trained_model = MyAgent(
+            epsilon=0.0,
+            epsilon_decay=0.0,
+            alpha=0.0,
+            gamma=0.0,
+            big_blind=self.big_blind,
+            name="LastTrainedModel_1",
+            stack_size=self.stack,
+            weights_file=load_weights_last_trained_model,
+            isNotLearning=True
+        )
+        last_trained_model_2 = MyAgent(
+            epsilon=0.0,
+            epsilon_decay=0.0,
+            alpha=0.0,
+            gamma=0.0,
+            big_blind=self.big_blind,
+            name="LastTrainedModel_2",
+            stack_size=self.stack,
+            weights_file=load_weights_last_trained_model,
+            isNotLearning=True
+        )
+        last_trained_model_3 = MyAgent(
+            epsilon=0.0,
+            epsilon_decay=0.0,
+            alpha=0.0,
+            gamma=0.0,
+            big_blind=self.big_blind,
+            name="LastTrainedModel_3",
+            stack_size=self.stack,
+            weights_file=load_weights_last_trained_model,
+            isNotLearning=True
+        )
 
         # *** TRAINING AGENT MUST BE ADDED FIRST ***
         # Due to added early termination condition in _check_game_over()
@@ -414,22 +429,12 @@ class SelfPlay:
         
         self.env.unwrapped.add_player(EquityPlayer(name='equity/20/30', min_call_equity=.2, min_bet_equity=-.3))
         self.env.unwrapped.add_player(RandomPlayer(name=f'Random_1'))
-        self.env.unwrapped.add_player(EquityPlayer(name='equity/50/50', min_call_equity=.5, min_bet_equity=-.5))
-
-        last_trained_model = MyAgent(
-            epsilon=0.0,
-            epsilon_decay=0.0,
-            alpha=0.0,
-            gamma=0.0,
-            big_blind=self.big_blind,
-            name="LastTrainedModel",
-            stack_size=self.stack,
-            weights_file=load_weights_last_trained_model,
-            isNotLearning=True
-        )
         self.env.unwrapped.add_player(last_trained_model)
+        self.env.unwrapped.add_player(EquityPlayer(name='equity/50/50', min_call_equity=.5, min_bet_equity=-.5))
+        self.env.unwrapped.add_player(last_trained_model_2)
         self.env.unwrapped.add_player(EquityPlayer(name='equity/50/80', min_call_equity=.8, min_bet_equity=-.8))
         self.env.unwrapped.add_player(RandomPlayer(name=f'Random_2'))
+        self.env.unwrapped.add_player(last_trained_model_3)
         self.env.unwrapped.add_player(EquityPlayer(name='equity/70/70', min_call_equity=.7, min_bet_equity=-.7))
 
         # -------------------------
