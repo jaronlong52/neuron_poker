@@ -6,7 +6,7 @@ from typing import List, Dict, Any, Tuple
 
 
 # Configuration
-FEATURE_SIZE = 24
+FEATURE_SIZE = 45
 NUM_ACTIONS = 8
 
 
@@ -365,14 +365,24 @@ class Player:
 
         # Player data
         player = info["player_data"]
+        
+        # equity_to_river_alive:
+        # Estimated win probability (0.0 – 1.0) of the current player's hand
+        # against all remaining active opponents, assuming:
+        # - the hand goes to showdown (all board cards are dealt),
+        # - opponents have random hole cards from the remaining deck,
+        # - folded players are excluded.
+        # Computed via Monte-Carlo simulation (1000 iterations).
+        # This is the agent's primary signal of current hand strength vs. the field.
         equity = player["equity_to_river_alive"]
+
         position = player["position"]
         stack = player["stack"][position]
 
         # Community data
         comm = info["community_data"]
         stage = comm["stage"]
-        current_stage = stage.index(True)
+        current_stage = stage.index(True) # 0: Preflop, 1: Flop, 2: Turn, 3: River
         community_pot = comm["community_pot"]
         current_round_pot = comm["current_round_pot"]
         total_pot = community_pot + current_round_pot
@@ -381,11 +391,12 @@ class Player:
         num_active_players = sum(active_players)
 
         # Stage data
-        stage_data = info["stage_data"][current_stage]
-        raises = stage_data["raises"]
-        min_call = stage_data["min_call_at_action"][position]
-        contribution = stage_data["contribution"][position]
-        stack_at_action = stage_data["stack_at_action"]
+        all_stage_data = info["stage_data"]
+        current_stage_data = all_stage_data[current_stage]
+        raises = current_stage_data["raises"]
+        min_call = current_stage_data["min_call_at_action"][position]
+        contribution = current_stage_data["contribution"][position]
+        stack_at_action = current_stage_data["stack_at_action"]
         
         
         # === CORE STATE FEATURES ===
@@ -475,6 +486,205 @@ class Player:
 
         # Commitment x Aggression - detects bluff-heavy vs value-heavy pressure when still committed
         features[23] = commitment_ratio * other_player_last_aggressor
+
+
+        # === OPPONENT MODELING ===
+        # Get list of opponent positions (exclude our position, only include active players)
+        opponent_positions = [i for i in range(num_players) if i != position and active_players[i]]
+
+        if opponent_positions:
+            # Feature[24]: Average opponent aggression THIS STREET ONLY
+            # How many opponents raised on the current street?
+            opponents_who_raised_this_street = sum(1 for opp_pos in opponent_positions 
+                                                   if current_stage_data["raises"][opp_pos])
+            # Normalize by number of opponents
+            features[24] = opponents_who_raised_this_street / len(opponent_positions)
+            # Interpretation: 0 = no opponents raised, 1 = all opponents raised this street
+
+            # Feature[25]: Total opponent aggression ACROSS ALL STREETS
+            # Count how many times ANY opponent raised in the entire hand so far
+            total_opponent_raises = 0
+            for street_idx in range(current_stage + 1):  # All streets up to current
+                for opp_pos in opponent_positions:
+                    if all_stage_data[street_idx]["raises"][opp_pos]:
+                        total_opponent_raises += 1
+
+            # Normalize by (number of streets played * number of opponents)
+            # This gives us "raises per opponent per street"
+            features[25] = total_opponent_raises / (len(opponent_positions) * (current_stage + 1))
+            # Interpretation: 0 = opponents never raised, 1 = every opponent raised every street
+
+        else:
+            features[24] = 0  # No opponents left (heads up and won, or everyone folded)
+            features[25] = 0
+
+        # Opponent calling frequency (passive players)
+        total_opponent_calls = sum(current_stage_data["calls"][i] 
+                                   for i in opponent_positions if i < len(current_stage_data["calls"]))
+        features[26] = total_opponent_calls / max(len(opponent_positions), 1)
+
+
+        # === BLUFFING INDICATORS ===
+        # Bluff profitability = low equity + few opponents + already committed
+        # (Bluffs work better when fewer players to fold out)
+        bluff_opportunity = (1 - equity) * (1 / (num_active_players + 1e-9)) * commitment_ratio
+        features[27] = bluff_opportunity
+
+        # Fold equity estimate based on pot size relative to opponent stacks
+        # Large bets relative to opponent stacks = more fold pressure
+        if opponent_positions:
+            avg_opponent_stack = np.mean([stack_at_action[i] for i in opponent_positions])
+            fold_pressure = cost / (avg_opponent_stack + 1e-9)
+            features[28] = np.clip(fold_pressure, 0, 2)  # Normalized fold pressure
+        else:
+            features[28] = 0
+
+        # Semi-bluff indicator: moderate equity (draws) + aggression opportunity
+        # Equity between 0.3-0.5 is often a draw
+        is_draw_range = 1 if 0.25 < equity < 0.55 else 0
+        # Have a draw (is_draw_range = 1), not too committed, and in good (high) position
+        semi_bluff_opportunity = is_draw_range * (1 - commitment_ratio) * position_norm
+        features[29] = semi_bluff_opportunity
+
+
+        # === ACTION HISTORY (WHAT HAVE I DONE THIS HAND?) ===
+        # We need to look at ALL streets played so far (preflop through current street)
+        streets_played = current_stage + 1  # +1 because stage is 0-indexed
+
+        # Initialize counters
+        agent_total_checks = 0
+        agent_total_calls = 0
+        agent_total_raises = 0
+
+        # Count our actions across all streets
+        for street_idx in range(streets_played):
+            # Did we call on this street?
+            if all_stage_data[street_idx]["calls"][position]:
+                agent_total_calls += 1
+
+            # Did we raise on this street?
+            if all_stage_data[street_idx]["raises"][position]:
+                agent_total_raises += 1
+
+            # Did we check? (neither called nor raised, and we had the option to check)
+            # Note: This is approximate since we don't track checks explicitly
+            # We infer: if we didn't call or raise, we likely checked or folded
+            # But we're still active, so we must have checked
+            did_not_call_or_raise = not all_stage_data[street_idx]["calls"][position] and \
+                                    not all_stage_data[street_idx]["raises"][position]
+            if did_not_call_or_raise:
+                agent_total_checks += 1
+
+        # Feature[30]: Checking frequency (passive play)
+        # How often do we check per street?
+        features[30] = agent_total_checks / streets_played
+        # Interpretation: 0 = never checked, 1 = checked every street (very passive)
+
+        # Feature[31]: Calling frequency (passive play)
+        # How often do we call per street?
+        features[31] = agent_total_calls / streets_played
+        # Interpretation: 0 = never called, 1 = called every street (chasing)
+
+        # Feature[32]: Raising frequency (aggressive play)
+        # How often do we raise per street?
+        features[32] = agent_total_raises / streets_played
+        # Interpretation: 0 = never raised, 1 = raised every street (very aggressive)
+
+        # Feature[33]: Did we show strength earlier?
+        # Have we raised on ANY previous street (not including current street)?
+        raised_on_previous_streets = 0
+        for street_idx in range(current_stage):  # Only previous streets, not current
+            if all_stage_data[street_idx]["raises"][position]:
+                raised_on_previous_streets = 1
+                break  # We only need to know if we did it at least once
+            
+        features[33] = raised_on_previous_streets
+        # Interpretation: 0 = we've been passive so far, 1 = we showed strength earlier
+        # Why it matters: If you raised preflop, opponents expect you to have a good hand
+
+        # Feature[34]: Check-raise opportunity
+        # Did we CHECK earlier this street, and is an OPPONENT now BETTING/RAISING?
+
+        # Did we check this street? (we didn't call or raise yet this street)
+        we_checked_this_street = (not current_stage_data["calls"][position] and 
+                                  not current_stage_data["raises"][position])
+
+        # Did any opponent raise this street?
+        opponent_raised_this_street = any(current_stage_data["raises"][i] 
+                                          for i in opponent_positions 
+                                          if i < len(current_stage_data["raises"]))
+
+        # Check-raise opportunity = we checked AND opponent bet
+        check_raise_opportunity = we_checked_this_street and opponent_raised_this_street
+        features[34] = 1 if check_raise_opportunity else 0
+        # Interpretation: 1 = perfect check-raise spot (we checked, opponent bet)
+        # Why it matters: Check-raising is deceptive and builds bigger pots with strong hands
+
+        # Feature[35]: Check-raise VALUE
+        # If we have a check-raise opportunity AND strong equity, this is very valuable
+        features[35] = equity * (1 if check_raise_opportunity else 0)
+        # Interpretation: High value (>0.7) = strong hand + check-raise opportunity = RAISE NOW!
+        # Why it matters: Check-raising with strong hands wins more money
+
+
+        # === DECEPTION & TABLE IMAGE ===
+        # Tight image: if we've folded/checked most of the time, bluffs are more credible
+        total_actions = agent_total_checks + agent_total_calls + agent_total_raises + 1e-9
+        passivity_ratio = (agent_total_checks + agent_total_calls) / total_actions
+        features[36] = passivity_ratio
+
+        # Deception opportunity: showed strength but now facing resistance
+        # (can we fold a hand we represented as strong?)
+        if current_stage > 0:
+            raised_last_street = all_stage_data[current_stage - 1]["raises"][position]
+        else:
+            raised_last_street = False
+        recent_strength = 1 if raised_last_street else 0
+        overall_strength = (agent_total_raises / streets_played) if streets_played > 0 else 0
+
+        # Weight recent strength more heavily (70% recent, 30% overall)
+        apparent_strength = 0.7 * recent_strength + 0.3 * overall_strength
+        deception_opportunity = apparent_strength * (1 - equity) * other_player_last_aggressor
+        features[37] = deception_opportunity
+
+        # Trap opportunity: strong hand + passive play so far
+        # (slowplay strong hands to induce bluffs)
+        trap_opportunity = equity * passivity_ratio * (1 if spr > 2 else 0)  # only with deep stacks
+        features[38] = trap_opportunity
+
+
+        # === STAGE PROGRESSION FEATURES ===
+        # Contribution increase from previous streets
+        prev_contribution = sum(all_stage_data[i]["contribution"][position] for i in range(current_stage))
+        current_contribution = current_stage_data["contribution"][position]
+        contribution_acceleration = current_contribution / (prev_contribution + 1e-9)
+        features[39] = contribution_acceleration
+
+        # Pot growth across streets (betting tempo)
+        prev_street_pot = sum(all_stage_data[i]["community_pot_at_action"][position] for i in range(current_stage)) if current_stage > 0 else 0
+        pot_acceleration = community_pot / (prev_street_pot + 1e-9)
+        features[40] = pot_acceleration
+
+        # Late stage big bet indicator (turn/river aggression is more credible)
+        late_stage = 1 if current_stage >= 2 else 0  # Turn or River
+        features[41] = late_stage * (cost / (total_pot + 1e-9))
+
+
+        # === POSITIONAL DYNAMICS ===
+        # In position aggression (opponents acted before us, we close action)
+        # More players acted before = more info = better position
+        players_acted_before = sum(1 for i in range(position) if active_players[i])
+        positional_advantage = players_acted_before / (num_active_players + 1e-9)
+        features[42] = positional_advantage * position_norm
+
+        # Out of position vulnerability (players to act after us)
+        players_to_act_after = sum(1 for i in range(position + 1, num_players) if active_players[i])
+        positional_disadvantage = players_to_act_after / (num_active_players + 1e-9)
+        features[43] = positional_disadvantage
+
+        # Position x aggression interaction (bluffs work better in position)
+        features[44] = position_norm * other_player_last_aggressor * (1 - equity)
+
 
         features = np.clip(features, -10, 10) # clipping to avoid extreme values
         return features

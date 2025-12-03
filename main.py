@@ -349,9 +349,9 @@ class SelfPlay:
         num_episodes = 1000
 
         # Name of the file to save weights to after training
-        save_weights_to_file = "weights_s100_bb2_epi1000_passes3_rewardV2"
+        save_weights_to_file = "weights_s100_bb2_epi1000_passes3_featuresV4"
         # Name of the file to save plotted results to after training
-        save_plot_to_file = "td_error_s100_bb2_epi1000_passes3_rewardV2"
+        save_plot_to_file = "td_error_s100_bb2_epi1000_passes3_featuresV4"
 
         training_agent = MyAgent(
             epsilon=1.0,
