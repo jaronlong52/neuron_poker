@@ -111,7 +111,8 @@ class Player:
         
         source_of_decision = "greedily" if exploited else "at random"
         # print action chosen out of legal actions
-        print(f"[Agent]  Chosen: {action.name} ({source_of_decision}),                   Legal: {[a.name for a in legal_actions]}, Epsilon: {self.epsilon:.4f}")
+        if not self.isNotLearning:
+            print(f"[Agent]  Chosen: {action.name} ({source_of_decision}),                   Legal: {[a.name for a in legal_actions]}, Epsilon: {self.epsilon:.4f}")
 
         # to avoid reference bugs
         import copy
@@ -381,6 +382,7 @@ class Player:
         meaningful features based on the poker game state.
         """
         features = np.zeros(FEATURE_SIZE)
+        BB = self.big_blind # Added for normalization consistency
 
         # Player data
         player = info["player_data"]
@@ -417,13 +419,17 @@ class Player:
         contribution = current_stage_data["contribution"][position]
         stack_at_action = current_stage_data["stack_at_action"]
         
+        # Cost to call
+        cost = max(0, min_call - contribution)
+        # Cost normalized by BB
+        cost_norm = cost / BB
+        
         
         # === CORE STATE FEATURES ===
         # Probability of winning to the river.
         features[0] = equity
 
         # Pot Odds - Break-even threshold for calling
-        cost = max(0, min_call - contribution)
         pot_odds = cost / (total_pot + cost + 1e-9)
         features[1] = pot_odds
 
@@ -457,7 +463,8 @@ class Player:
         features[9] = commitment_ratio
 
         # Pressure - normalized size of the bet relative to BB
-        pressure = cost
+        # Minimal Change: Normalized Pressure by BB
+        pressure = cost_norm 
         features[10] = pressure
 
         # Equity x pressure - strong hands respond differently to aggression than weak ones
@@ -465,15 +472,16 @@ class Player:
 
 
         # === STAGE FLAGS ===
-        features[12] = 1 if current_stage == 0 else 0    # Preflop
-        features[13] = 1 if current_stage == 1 else 0    # Flop
-        features[14] = 1 if current_stage == 2 else 0    # Turn
-        features[15] = 1 if current_stage == 3 else 0    # River
+        features[12] = 1 if current_stage == 0 else 0 # Preflop
+        features[13] = 1 if current_stage == 1 else 0 # Flop
+        features[14] = 1 if current_stage == 2 else 0 # Turn
+        features[15] = 1 if current_stage == 3 else 0 # River
 
 
         # === HIGH VALUE STRATEGY FEATURES ===
         # Raise-to-pot ratio for how expensive a raise is relative to pot
-        features[16] = cost / (total_pot + 1e-9)
+        rtp_ratio = cost / (total_pot + 1e-9)
+        features[16] = rtp_ratio
 
         # Opponent aggression last street - whether someone else raised
         opponent_raised = any(raises[j] for j in range(len(raises)) if j != position)
@@ -587,8 +595,7 @@ class Player:
 
             # Did we check? (neither called nor raised, and we had the option to check)
             # Note: This is approximate since we don't track checks explicitly
-            # We infer: if we didn't call or raise, we likely checked or folded
-            # But we're still active, so we must have checked
+            # We infer: if we didn't call or raise, and we are active, we must have checked
             did_not_call_or_raise = not all_stage_data[street_idx]["calls"][position] and \
                                     not all_stage_data[street_idx]["raises"][position]
             if did_not_call_or_raise:
@@ -676,17 +683,23 @@ class Player:
         # Contribution increase from previous streets
         prev_contribution = sum(all_stage_data[i]["contribution"][position] for i in range(current_stage))
         current_contribution = current_stage_data["contribution"][position]
-        contribution_acceleration = current_contribution / (prev_contribution + 1e-9)
+        
+        # Minimal Change: Normalize contributions by BB before calculating acceleration
+        prev_contribution_norm = prev_contribution / BB
+        current_contribution_norm = current_contribution / BB
+        contribution_acceleration = current_contribution_norm / (prev_contribution_norm + 1e-9)
         features[39] = contribution_acceleration
 
         # Pot growth across streets (betting tempo)
         prev_street_pot = sum(all_stage_data[i]["community_pot_at_action"][position] for i in range(current_stage)) if current_stage > 0 else 0
-        pot_acceleration = community_pot / (prev_street_pot + 1e-9)
+        
+        # Minimal Change: Normalize pot by BB before calculating acceleration
+        pot_acceleration = (community_pot / BB) / ((prev_street_pot / BB) + 1e-9)
         features[40] = pot_acceleration
 
         # Late stage big bet indicator (turn/river aggression is more credible)
-        late_stage = 1 if current_stage >= 2 else 0  # Turn or River
-        features[41] = late_stage * (cost / (total_pot + 1e-9))
+        late_stage = 1 if current_stage >= 2 else 0 # Turn or River
+        features[41] = late_stage * rtp_ratio
 
 
         # === POSITIONAL DYNAMICS ===
@@ -696,16 +709,15 @@ class Player:
         positional_advantage = players_acted_before / (num_active_players + 1e-9)
         features[42] = positional_advantage * position_norm
 
-        # Out of position vulnerability (players to act after us)
+        # Feature[43]: Out of position vulnerability (0.0 – 1.0) - Added for full set
         players_to_act_after = sum(1 for i in range(position + 1, num_players) if active_players[i])
-        positional_disadvantage = players_to_act_after / (num_active_players + 1e-9)
-        features[43] = positional_disadvantage
+        vulnerability = players_to_act_after / (num_active_players + 1e-9)
+        features[43] = vulnerability * (1 - position_norm)
 
-        # Position x aggression interaction (bluffs work better in position)
-        features[44] = position_norm * other_player_last_aggressor * (1 - equity)
-
-
-        features = np.clip(features, -10, 10) # clipping to avoid extreme values
+        # Feature[44]: Total Pot (Normalized by BB) - Added for full set
+        # 💡 Minimal Change: Adding final feature, normalized by BB
+        features[44] = total_pot / BB
+        
         return features
 
 
@@ -732,71 +744,42 @@ class Player:
     # ====================================================================
     def plot_td_error(self, name: str = "td_error_progress.png"):
         import matplotlib.pyplot as plt
+        import pandas as pd # Import pandas for rolling calculation
+        import numpy as np # Keep numpy import if used elsewhere in the class
 
         if len(self.hand_mean_squared_errors) == 0:
             print("No TD error data recorded.")
             return
 
-        data = np.array(self.hand_mean_squared_errors)
-        total_hands = len(data)
-
+        # Use pandas Series for easy rolling average calculation
+        data_series = pd.Series(self.hand_mean_squared_errors)
+        
         # Dynamic window: ~5-10% of data, minimum 5
-        window = max(5, len(data) // 15)
-        smoothed = np.convolve(data, np.ones(window)/window, mode='valid')
+        window = max(5, len(data_series) // 15)
+        
+        # Minimal Change: Use pandas rolling mean (which is a rolling average)
+        # .mean() is applied to the rolling object.
+        # .rolling(window=window) uses a trailing window (standard for time series).
+        smoothed = data_series.rolling(window=window).mean()
 
-        # *** NEW: Downsample if too many points (>10k) ***
-        max_points = 10000
-        if len(data) > max_points:
-            downsample_factor = len(data) // max_points
-            data_plot = data[::downsample_factor]
-            smoothed_plot = smoothed[::downsample_factor]
-            x_data = np.arange(0, len(data), downsample_factor)
-            x_smoothed = np.arange(0, len(smoothed), downsample_factor)
-            print(f"Downsampled from {len(data)} to {len(data_plot)} points for visualization")
-        else:
-            data_plot = data
-            smoothed_plot = smoothed
-            x_data = np.arange(len(data))
-            x_smoothed = np.arange(len(smoothed))
-
-        plt.figure(figsize=(14, 7))
-
-        # Plot raw data with transparency
-        plt.plot(x_data, data_plot, linewidth=1, alpha=0.2, label='Raw TD Error', color='blue')
-
-        # Plot smoothed line
-        plt.plot(x_smoothed, smoothed_plot, linewidth=2.5, label=f'Smoothed (window={window})', color='red')
-
-        # *** NEW: Add vertical lines for training phases ***
-        # Mark when epsilon hits key thresholds
-        epsilon_vals = [1.0 * (0.9994 ** ep) for ep in range(5000)]
-        episodes_per_hand = total_hands / 5000  # Approximate hands per episode
-
-        # Find episodes where epsilon crosses thresholds
-        ep_50 = next((i for i, e in enumerate(epsilon_vals) if e <= 0.5), None)
-        ep_10 = next((i for i, e in enumerate(epsilon_vals) if e <= 0.1), None)
-
-        if ep_50:
-            plt.axvline(x=ep_50 * episodes_per_hand, color='orange', linestyle='--', 
-                       alpha=0.5, label=f'ε=0.5 (ep {ep_50})')
-        if ep_10:
-            plt.axvline(x=ep_10 * episodes_per_hand, color='green', linestyle='--', 
-                       alpha=0.5, label=f'ε=0.1 (ep {ep_10})')
-
-        plt.xlabel("Hand Number", fontsize=12)
-        plt.ylabel("Mean Squared TD Error", fontsize=12)
-        plt.title(f"TD Error Over Training ({total_hands} hands, {window}-hand smoothing)", fontsize=14)
-        plt.legend(loc='best')
+        plt.figure(figsize=(12, 6))
+        
+        # Plot Raw MSE (Faded)
+        plt.plot(data_series.index, data_series.values, linewidth=1, alpha=0.3, label='Raw Hand MSE')
+        
+        # Plot Smoothed Rolling Average (Starting after the window size)
+        # We plot the index of the smoothed series, which aligns correctly with the data_series index.
+        plt.plot(smoothed.index, smoothed.values, linewidth=2, color='blue', label=f'Rolling Average MSE (Window={window})')
+        
+        # General plot configuration
+        plt.xlabel("Hand Number")
+        plt.ylabel("Mean Squared TD Error")
+        plt.title("TD Error Over Training: Convergence Trend 📉")
+        plt.legend()
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.savefig(name, dpi=150, bbox_inches='tight')
-
-        print(f"Total hands: {total_hands}")
-        print(f"Episodes: 5000")
-        print(f"Avg hands/episode: {total_hands/5000:.1f}")
-        print(f"Smoothing window: {window} hands")
-        print(f"Saved plot: {name}")
-
+        plt.savefig(name, dpi=150)
+        print(f"Data points: {len(self.hand_mean_squared_errors)}, Window size: {window}")
         plt.show()
 
 
