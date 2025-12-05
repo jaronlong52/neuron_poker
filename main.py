@@ -287,10 +287,11 @@ class SelfPlay:
                 agent.num_actions = 0
                 agent.num_updates = 0
                 agent.num_markers = 0
-                agent.episode_history = []
 
                 # --- Get final funds from agent episode_history ---
                 valid_steps = [step for step in agent.episode_history if step[0] is not None]
+
+                agent.episode_history = []
 
                 if len(valid_steps) == 0:
                     print("[TEST] ERROR: episode_history empty — cannot determine winner.")
@@ -346,25 +347,27 @@ class SelfPlay:
 
         self.stack = 100 # hard coded for simplicity
         self.big_blind = 2
-        num_episodes = 1000
+        num_episodes =1000
+        num_passes = 2
+        e_decay = 0.9970
 
         # Name of the file to save weights to after training
-        save_weights_to_file = "weights_s100_bb2_epi1000_passes3_featuresV5"
+        save_weights_to_file = "weights_s100_bb2_epi1000_passes2_clipped"
         # Name of the file to save plotted results to after training
-        save_plot_to_file = "td_error_s100_bb2_epi1000_passes3_featuresV5"
+        save_plot_to_file = "td_error_s100_bb2_epi1000_passes2_clipped"
 
         # Name of file to load weights of last trained agent from
-        load_weights_last_trained_model = "weights_s100_bb2_epi1000_passes3_featuresV4"
+        load_weights_last_trained_model = "weights_s100_bb2_epi1000_passes10_featuresV5"
 
         training_agent = MyAgent(
             epsilon=1.0,
-            epsilon_decay=0.999,
+            epsilon_decay=e_decay,
             alpha=0.001,
             gamma=0.95,
             big_blind=self.big_blind,
             name="QAgent",
             stack_size=self.stack,
-            num_update_passes=3,
+            num_update_passes=num_passes,
             isNotLearning=False
         )
 

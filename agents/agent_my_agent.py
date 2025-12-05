@@ -362,7 +362,13 @@ class Player:
             target = reward
         
         td_error = target - q_sa
-        self.weights[:, a_idx] += self.alpha * td_error * features
+        # clip TD error to prevent exploding updates
+        td_error = np.clip(td_error, -1, 1)
+        # Update with clipped gradient
+        gradient = self.alpha * td_error * features
+        gradient = np.clip(gradient, -0.5, 0.5)
+        self.weights[:, a_idx] += gradient
+        self.weights = np.clip(self.weights, -5, 5)  # prevent weight explosion
         return td_error
 
 
@@ -734,22 +740,65 @@ class Player:
             return
 
         data = np.array(self.hand_mean_squared_errors)
+        total_hands = len(data)
 
         # Dynamic window: ~5-10% of data, minimum 5
         window = max(5, len(data) // 15)
         smoothed = np.convolve(data, np.ones(window)/window, mode='valid')
 
-        plt.figure(figsize=(12, 6))
-        plt.plot(data, linewidth=1, alpha=0.3, label='Raw TD Error')
-        plt.plot(smoothed, linewidth=2, label=f'Smoothed (window={window})')
-        plt.xlabel("Hand Number")
-        plt.ylabel("Mean Squared TD Error")
-        plt.title("TD Error Over Training")
-        plt.legend()
+        # *** NEW: Downsample if too many points (>10k) ***
+        max_points = 10000
+        if len(data) > max_points:
+            downsample_factor = len(data) // max_points
+            data_plot = data[::downsample_factor]
+            smoothed_plot = smoothed[::downsample_factor]
+            x_data = np.arange(0, len(data), downsample_factor)
+            x_smoothed = np.arange(0, len(smoothed), downsample_factor)
+            print(f"Downsampled from {len(data)} to {len(data_plot)} points for visualization")
+        else:
+            data_plot = data
+            smoothed_plot = smoothed
+            x_data = np.arange(len(data))
+            x_smoothed = np.arange(len(smoothed))
+
+        plt.figure(figsize=(14, 7))
+
+        # Plot raw data with transparency
+        plt.plot(x_data, data_plot, linewidth=1, alpha=0.2, label='Raw TD Error', color='blue')
+
+        # Plot smoothed line
+        plt.plot(x_smoothed, smoothed_plot, linewidth=2.5, label=f'Smoothed (window={window})', color='red')
+
+        # *** NEW: Add vertical lines for training phases ***
+        # Mark when epsilon hits key thresholds
+        epsilon_vals = [1.0 * (0.9994 ** ep) for ep in range(5000)]
+        episodes_per_hand = total_hands / 5000  # Approximate hands per episode
+
+        # Find episodes where epsilon crosses thresholds
+        ep_50 = next((i for i, e in enumerate(epsilon_vals) if e <= 0.5), None)
+        ep_10 = next((i for i, e in enumerate(epsilon_vals) if e <= 0.1), None)
+
+        if ep_50:
+            plt.axvline(x=ep_50 * episodes_per_hand, color='orange', linestyle='--', 
+                       alpha=0.5, label=f'ε=0.5 (ep {ep_50})')
+        if ep_10:
+            plt.axvline(x=ep_10 * episodes_per_hand, color='green', linestyle='--', 
+                       alpha=0.5, label=f'ε=0.1 (ep {ep_10})')
+
+        plt.xlabel("Hand Number", fontsize=12)
+        plt.ylabel("Mean Squared TD Error", fontsize=12)
+        plt.title(f"TD Error Over Training ({total_hands} hands, {window}-hand smoothing)", fontsize=14)
+        plt.legend(loc='best')
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.savefig(name, dpi=150)
-        print(f"Data points: {len(self.hand_mean_squared_errors)}, Window size: {window}")
+        plt.savefig(name, dpi=150, bbox_inches='tight')
+
+        print(f"Total hands: {total_hands}")
+        print(f"Episodes: 5000")
+        print(f"Avg hands/episode: {total_hands/5000:.1f}")
+        print(f"Smoothing window: {window} hands")
+        print(f"Saved plot: {name}")
+
         plt.show()
 
 
