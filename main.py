@@ -260,82 +260,99 @@ class SelfPlay:
         print(league_table)
         print(f"Best Player: {best_player}")
 
-    def my_agent_test(self, agent, weights_path, save_file="temp_name", test_episodes=100):
+    def my_agent_test(self, agent, weights_path, save_file="temp_name", test_episodes=200):
         """
-        Test the agent with epsilon = 0 using loaded weights.
+        Test the agent using loaded weights.
         Tracks win counts and produces a bar graph.
         """
         import matplotlib.pyplot as plt
 
-        # Load trained weights
+        # Load trained weights and configure for testing
         agent.load_weights(weights_path)
-        agent.epsilon = 0.0  # no exploration during testing
+        agent.isNotLearning = True  # Disable learning during testing
+        agent.epsilon = 0.0      # Disable exploration
 
         # Track wins per player
         player_names = [p.name for p in self.env.unwrapped.players]
         win_counts = {name: 0 for name in player_names}
 
+        # Additional metrics
+        total_rewards = {name: 0.0 for name in player_names}
+        episode_lengths = []
+
+        print("### Starting Testing Phase ###")
+        start_time = datetime.now()
+
         for ep in range(test_episodes):
-            print(f"[TEST] Episode {ep+1}/{test_episodes}")
+            print(f"[TEST] Episode {ep + 1}/{test_episodes}")
 
-            print("$$ Starting testing...")
-            start_time = datetime.now()
+            # Reset environment - this runs the entire episode
+            self.env.reset()
 
-            for ep in range(test_episodes):
-                print(f"$$ Episode {ep + 1}/{test_episodes}")
-                self.env.reset()
-                agent.num_actions = 0
-                agent.num_updates = 0
-                agent.num_markers = 0
-
-                # --- Get final funds from agent episode_history ---
-                valid_steps = [step for step in agent.episode_history if step[0] is not None]
-
-                agent.episode_history = []
-
-                if len(valid_steps) == 0:
-                    print("[TEST] ERROR: episode_history empty — cannot determine winner.")
-                    continue
+            # Get final results from the completed episode
+            if len(agent.episode_history) == 0:
+                print(f"[TEST] WARNING: Episode {ep + 1} - episode_history empty, skipping...")
+                continue
+            
+            # Find the last non-marker entry in history
+            last_info = None
+            for info, _ in reversed(agent.episode_history):
+                if info is not None:
+                    last_info = info
+                    break
                 
-                last_info = valid_steps[-1][0]
+            if last_info is None:
+                print(f"[TEST] WARNING: Episode {ep + 1} - no valid info in history, skipping...")
+                continue
+            agent.episode_history = []  # Clear history for next episode
 
-                # Extract stacks depending on how they are named
-                if "player_funds" in last_info:
-                    final_funds = np.array(last_info["player_funds"])
-                elif "stacks" in last_info:
-                    final_funds = np.array(last_info["stacks"])
-                elif "player_funds_at_action" in last_info:
-                    final_funds = np.array(last_info["player_funds_at_action"])
-                else:
-                    raise ValueError("[TEST] Could not find stack information in last_info")
-                
-                winner_index = final_funds.argmax()
-                winner_name = player_names[winner_index]
-                win_counts[winner_name] += 1
+            # Extract final stacks from player_data
+            player_data = last_info['player_data']
+            final_funds = np.array(player_data['stack']) * (self.big_blind * 100)
+            
+            # Determine winner and update metrics
+            winner_index = final_funds.argmax()
+            winner_name = player_names[winner_index]
+            win_counts[winner_name] += 1
 
-        print("$$ Testing finished.")
+            # Track total funds for each player
+            for i, name in enumerate(player_names):
+                total_rewards[name] += final_funds[i]
+
+            # Count actual actions (exclude markers)
+            action_count = sum(1 for info, _ in agent.episode_history if info is not None)
+            episode_lengths.append(action_count)
+
+        print("\n### Testing Finished ###")
         end_time = datetime.now()
-
         time_difference = end_time - start_time
+
         print(f"Start time: {start_time}")
         print(f"End time: {end_time}")
         print(f"Duration: {time_difference}")
+        print(f"Average episode length: {np.mean(episode_lengths):.2f} actions")
 
         print("\n### TEST RESULTS ###")
-        for name, count in win_counts.items():
-            print(f"{name}: {count} wins")
+        valid_episodes = sum(win_counts.values())
+        print(f"Valid episodes: {valid_episodes}/{test_episodes}")
 
-        # --------- Bar Graph Visualization ---------
-        plt.figure(figsize=(10, 6))
-        plt.bar(win_counts.keys(), win_counts.values())
-        plt.title("Agent vs Random Players — Test Win Counts")
-        plt.xlabel("Player")
-        plt.ylabel("Wins")
-        plt.xticks(rotation=45)
+        # --------- Visualization ---------
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        # Win counts bar chart
+        ax.bar(win_counts.keys(), win_counts.values(), color='steelblue', alpha=0.8)
+        ax.set_title("Test Win Counts", fontsize=14, fontweight='bold')
+        ax.set_xlabel("Player")
+        ax.set_ylabel("Wins")
+        ax.tick_params(axis='x', rotation=45)
+        ax.grid(axis='y', alpha=0.3)
+
         plt.tight_layout()
-        save_file += "_test_results"
+        save_file += "_test_results.png"
         plt.savefig(save_file, dpi=150)
+        print(f"\nPlot saved to: {save_file}")
         plt.show()
+
 
     def my_agent_play(self, test_mode=False, weights_file=None):
         """1 MyAgent vs 5 random"""
@@ -374,6 +391,39 @@ class SelfPlay:
         self.env = gym.make(env_name, initial_stacks=self.stack, small_blind=1, big_blind=self.big_blind, render=self.render, funds_plot=False)
 
         # Add players via unwrapped
+        last_trained_model = MyAgent(
+            epsilon=0.0,
+            epsilon_decay=0.0,
+            alpha=0.0,
+            gamma=0.0,
+            big_blind=self.big_blind,
+            name="LastTrainedModel_1",
+            stack_size=self.stack,
+            weights_file=load_weights_last_trained_model,
+            isNotLearning=True
+        )
+        last_trained_model_2 = MyAgent(
+            epsilon=0.0,
+            epsilon_decay=0.0,
+            alpha=0.0,
+            gamma=0.0,
+            big_blind=self.big_blind,
+            name="LastTrainedModel_2",
+            stack_size=self.stack,
+            weights_file=load_weights_last_trained_model,
+            isNotLearning=True
+        )
+        last_trained_model_3 = MyAgent(
+            epsilon=0.0,
+            epsilon_decay=0.0,
+            alpha=0.0,
+            gamma=0.0,
+            big_blind=self.big_blind,
+            name="LastTrainedModel_3",
+            stack_size=self.stack,
+            weights_file=load_weights_last_trained_model,
+            isNotLearning=True
+        )
 
         # *** TRAINING AGENT MUST BE ADDED FIRST ***
         # Due to added early termination condition in _check_game_over()
@@ -381,22 +431,12 @@ class SelfPlay:
         
         self.env.unwrapped.add_player(EquityPlayer(name='equity/20/30', min_call_equity=.2, min_bet_equity=-.3))
         self.env.unwrapped.add_player(RandomPlayer(name=f'Random_1'))
-        self.env.unwrapped.add_player(EquityPlayer(name='equity/50/50', min_call_equity=.5, min_bet_equity=-.5))
-
-        last_trained_model = MyAgent(
-            epsilon=0.0,
-            epsilon_decay=0.0,
-            alpha=0.0,
-            gamma=0.0,
-            big_blind=self.big_blind,
-            name="LastTrainedModel",
-            stack_size=self.stack,
-            weights_file=load_weights_last_trained_model,
-            isNotLearning=True
-        )
         self.env.unwrapped.add_player(last_trained_model)
+        self.env.unwrapped.add_player(EquityPlayer(name='equity/50/50', min_call_equity=.5, min_bet_equity=-.5))
+        self.env.unwrapped.add_player(last_trained_model_2)
         self.env.unwrapped.add_player(EquityPlayer(name='equity/50/80', min_call_equity=.8, min_bet_equity=-.8))
         self.env.unwrapped.add_player(RandomPlayer(name=f'Random_2'))
+        self.env.unwrapped.add_player(last_trained_model_3)
         self.env.unwrapped.add_player(EquityPlayer(name='equity/70/70', min_call_equity=.7, min_bet_equity=-.7))
 
         # -------------------------
