@@ -374,7 +374,7 @@ class SelfPlay:
         save_plot_to_file = "td_error_s100_bb2_epi1000_passes2_featuresV7"
 
         # Name of file to load weights of last trained agent from
-        load_weights_last_trained_model = "weights_s100_bb2_epi1000_passes10_featuresV5"
+        load_weights_last_trained_model = "weights_s100_bb2_epi1000_passes2_featuresV7"
 
         training_agent = MyAgent(
             epsilon=1.0,
