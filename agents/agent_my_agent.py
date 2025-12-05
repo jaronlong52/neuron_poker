@@ -138,115 +138,33 @@ class Player:
 
     def _compute_ev_reward(self, info: Dict, action: Action) -> float:
         """
-        Computes an Expected Value (EV) based reward for a single action.
-        This includes special EV handling for FOLD and correctly calculates the EV of a RAISE.
+        Simple intermediate rewards based on equity vs pot odds.
+        Kept small to let terminal rewards dominate learning.
         """
-        player = info["player_data"]
-        comm = info["community_data"]
-        current_stage = comm["stage"].index(True)
-        stage_data = info["stage_data"][current_stage]
-
-        position = player["position"]
-        equity = float(player["equity_to_river_alive"])
-        equity = max(0.0, min(1.0, equity))  # safety clamp
-
-        # Pot sizes
-        total_pot = float(comm["community_pot"]) + float(comm["current_round_pot"])
-
-        # Contribution / call sizes
-        # Safely extract current_stage data
-        min_call = stage_data["min_call_at_action"][position]
-        contribution = stage_data["contribution"][position]
-        cost_to_call = max(0.0, min_call - contribution)
-        
-        # 💡 Minimal Change: Determine the true amount committed by the player for this action 💡
-        money_committed = cost_to_call # Default for CALL, FOLD (since it returns 0)
-
-        # ───────────────────────────────────────────────
-        # 1. FOLD EV
-        # EV(fold) = 0.0, as no further money is committed or lost/gained.
-        # ───────────────────────────────────────────────
         if action == Action.FOLD:
             return 0.0
 
-        # ───────────────────────────────────────────────
-        # 2. CHECK EV
-        # Check costs nothing (cost_to_call = 0). EV = equity × total_pot
-        # ───────────────────────────────────────────────
+        player = info["player_data"]
+        comm = info["community_data"]
+        stage_data = info["stage_data"][comm["stage"].index(True)]
+
+        equity = np.clip(float(player["equity_to_river_alive"]), 0.0, 1.0)
+        position = player["position"]
+
+        # Already normalized by (BB * 100)
+        total_pot = float(comm["community_pot"]) + float(comm["current_round_pot"])
+        cost = max(0.0, stage_data["min_call_at_action"][position] - stage_data["contribution"][position])
+
+        # CHECK: Free action, small equity-based reward
         if action == Action.CHECK:
-            ev = equity * total_pot
-            
-            # normalize + clip
-            ev /= self.big_blind
-            ev = np.clip(ev, -5, 5)
-            return ev
+            return equity * 0.1  # Max reward: 0.1 (very small)
 
-        # ───────────────────────────────────────────────
-        # 3. CALL / RAISE / ALL_IN EV
-        # EV = equity * (pot + new_money) - (1 - equity) * new_money
-        # ───────────────────────────────────────────────
-        
-        # We need the ACTUAL money committed beyond the current contribution.
-        # This requires knowing the final bet amount the action results in.
-        
-        # ASSUMPTION: The 'info' dictionary contains 'action_bet_size' or 
-        # a similar key that holds the total chips put in the current street 
-        # by the agent *after* taking the action.
-        # Since this key is not in your provided 'info', we must infer the cost 
-        # based on the action name relative to the cost_to_call.
-        
-        if action in [Action.CALL, Action.ALL_IN]:
-            # For a CALL, the money committed is simply the cost_to_call.
-            # For ALL_IN, the entire stack (minus contribution) should be committed, 
-            # but since we don't know the stack here, we use cost_to_call for a baseline. 
-            # The terminal reward propagation is often better for ALL_IN anyway.
-            money_committed = cost_to_call
+        # All other actions: Simple pot odds comparison
+        pot_odds = cost / (total_pot + cost + 1e-9)
+        ev_signal = equity - pot_odds
 
-        elif action.name.startswith("RAISE_"):
-            # This is the crucial fix: we need to find the total chips committed 
-            # for the raise. We will approximate this by the next min_raise plus 
-            # the current call, or ideally, the actual amount of the raise.
-            
-            # Since the game engine determines the legal actions, we assume that 
-            # any RAISE action is correctly costed by the environment.
-            # The simplest assumption that forces differentiation between raises is:
-            
-            # 💡 FIX: Temporarily disable intermediate reward for large raises 
-            # and rely *only* on the terminal reward, which is less risky than 
-            # calculating an incorrect EV here.
-            if action in [Action.RAISE_HALF_POT, Action.RAISE_POT, Action.RAISE_2POT]:
-                return 0.0 # Neutral reward, letting the TD-learning propagate the true value from hand end.
-            
-            # Otherwise, assume RAISE_3BB is similar to a small call/bet
-            if action == Action.RAISE_3BB:
-                # We assume RAISE_3BB is a small increase over the cost to call.
-                # To be minimal, we keep it as cost_to_call, but rely on the TD update
-                # to learn the value difference based on game state changes.
-                money_committed = cost_to_call 
-        
-        # ------------------------------------------------------------------
-        # Recalculated EV Term (The formula itself is correct for a CALL, 
-        # but the variable must represent the *true* additional money risked)
-        # ------------------------------------------------------------------
-
-        # If the action is a large raise and we return 0.0, we skip this section.
-        if action not in [Action.RAISE_HALF_POT, Action.RAISE_POT, Action.RAISE_2POT]:
-            
-            # Win amount includes total pot + the money you are putting in now.
-            win_amount = total_pot + money_committed 
-
-            # The cost term is the money committed now.
-            ev = (equity * win_amount) - ((1.0 - equity) * money_committed)
-
-            # Normalize by big blind to stabilize learning
-            ev /= self.big_blind
-
-            # Cap the EV to avoid reward explosions
-            ev = float(np.clip(ev, -5, 5))
-
-            return ev
-        
-        return 0.0 # Return 0.0 for large raises that were filtered above
+        # Scale to [-0.2, 0.2] range - much smaller than terminal rewards
+        return np.clip(ev_signal * 0.5, -0.2, 0.2)
 
 
     def _choose_greedy(self, legal_actions: List[Action], info: Dict) -> Action:
@@ -359,15 +277,22 @@ class Player:
             target = reward + self.gamma * np.max(next_q)
         else:
             target = reward
-        
+
         td_error = target - q_sa
+
+        if abs(td_error) > 10:
+            print(f"   Large TD error: {td_error:.2f}")
+            print(f"   Q(s,a): {q_sa:.2f}, Target: {target:.2f}")
+            print(f"   Feature max: {np.max(np.abs(features)):.2f}")
+            print(f"   Weight max: {np.max(np.abs(self.weights[:, a_idx])):.2f}")
+        
         # clip TD error to prevent exploding updates
-        td_error = np.clip(td_error, -1, 1)
+        td_error = np.clip(td_error, -5, 5)
         # Update with clipped gradient
         gradient = self.alpha * td_error * features
         gradient = np.clip(gradient, -0.5, 0.5)
         self.weights[:, a_idx] += gradient
-        self.weights = np.clip(self.weights, -5, 5)  # prevent weight explosion
+        self.weights = np.clip(self.weights, -10, 10)  # prevent weight explosion
         return td_error
 
 
@@ -421,9 +346,11 @@ class Player:
         
         # Cost to call
         cost = max(0, min_call - contribution)
-        # Cost normalized by BB
-        cost_norm = cost / BB
-        
+
+        # Convert to BB units for human-readable calculations
+        stack_bb = stack * 100  # Now in BB units (0.5 -> 50 BB)
+        total_pot_bb = total_pot * 100  # Now in BB units
+        cost_bb = cost * 100  # Now in BB units
         
         # === CORE STATE FEATURES ===
         # Probability of winning to the river.
@@ -434,8 +361,8 @@ class Player:
         features[1] = pot_odds
 
         # Stack-to-pot ratio for deep vs short stack leverage
-        spr = stack / (total_pot + 1e-9)
-        features[2] = spr
+        spr = stack_bb / (total_pot_bb + 1e-9)
+        features[2] = np.clip(spr / 50, 0, 1)
 
         # Position normalized
         position_norm = position / max((num_players - 1), 1)
@@ -453,7 +380,7 @@ class Player:
         features[6] = equity * position_norm
 
         # Equity x Inverse stack-to-pot ratio - strong hands dominate when SPR is small
-        features[7] = equity * (1 / (spr + 1e-9))
+        features[7] = equity * np.clip(1 / (spr + 1e-9), 0, 1)
 
         # Bluff catching difficulty
         features[8] = (1 - equity) * pot_odds
@@ -463,12 +390,10 @@ class Player:
         features[9] = commitment_ratio
 
         # Pressure - normalized size of the bet relative to BB
-        # Minimal Change: Normalized Pressure by BB
-        pressure = cost_norm 
-        features[10] = pressure
+        features[10] = np.clip(cost_bb / 5, 0, 1)
 
         # Equity x pressure - strong hands respond differently to aggression than weak ones
-        features[11] = equity * pressure
+        features[11] = equity * features[10]
 
 
         # === STAGE FLAGS ===
@@ -481,38 +406,38 @@ class Player:
         # === HIGH VALUE STRATEGY FEATURES ===
         # Raise-to-pot ratio for how expensive a raise is relative to pot
         rtp_ratio = cost / (total_pot + 1e-9)
-        features[16] = rtp_ratio
+        features[16] = np.clip(rtp_ratio, 0, 1)
 
         # Opponent aggression last street - whether someone else raised
         opponent_raised = any(raises[j] for j in range(len(raises)) if j != position)
-        other_player_last_aggressor = 1 if opponent_raised else 0
-        features[17] = other_player_last_aggressor
+        features[17] = 1 if opponent_raised else 0
 
         # Pot growth rate - captures previous betting tempo
-        features[18] = current_round_pot / max((community_pot + 1e-9), 1)
+        features[18] = np.clip(current_round_pot / (community_pot + 1e-9), 0, 5) / 5
 
         # Stack vs average stack - pressure you can apply / pressure you are under
         active_stacks = [stack_at_action[i] for i in range(len(stack_at_action)) if active_players[i]]
-        average_stack = np.mean(active_stacks) if active_stacks else 1.0
-        features[19] = stack / (average_stack + 1e-9)
+        average_stack = np.mean(active_stacks) if active_stacks else stack
+        features[19] = np.clip(stack / (average_stack + 1e-9), 0, 2) / 2
 
         # Effective stack ratio - max possible amount that can go in
         opponent_stacks = [stack_at_action[i] for i in range(len(stack_at_action)) if i != position and active_players[i]]
         if opponent_stacks:
             max_opponent_stack = max(opponent_stacks)
             effective_stack = min(stack, max_opponent_stack)
-            features[20] = effective_stack / (total_pot + 1e-9)
+            effective_stack_bb = effective_stack * 100  # in BB units
+            features[20] = np.clip(effective_stack_bb / (total_pot_bb + 1e-9), 0, 20) / 20
         else:
             features[20] = 0
 
         # Equity x (cost / stack) - riskiness of continuing
-        features[21] = equity * (cost / (stack + 1e-9))
+        features[21] = equity * np.clip(cost / (stack + 1e-9), 0, 1)
 
         # SPR x position - deep stack in position = more freedom
-        features[22] = spr * position_norm
+        features[22] = features[2] * position_norm
 
         # Commitment x Aggression - detects bluff-heavy vs value-heavy pressure when still committed
-        features[23] = commitment_ratio * other_player_last_aggressor
+        features[23] = commitment_ratio * features[17]
 
 
         # === OPPONENT MODELING ===
@@ -541,28 +466,28 @@ class Player:
             features[25] = total_opponent_raises / (len(opponent_positions) * (current_stage + 1))
             # Interpretation: 0 = opponents never raised, 1 = every opponent raised every street
 
+            # Opponent calling frequency (passive players)
+            total_opponent_calls = sum(current_stage_data["calls"][i] 
+                                   for i in opponent_positions if i < len(current_stage_data["calls"]))
+            features[26] = total_opponent_calls / len(opponent_positions)
         else:
             features[24] = 0  # No opponents left (heads up and won, or everyone folded)
             features[25] = 0
-
-        # Opponent calling frequency (passive players)
-        total_opponent_calls = sum(current_stage_data["calls"][i] 
-                                   for i in opponent_positions if i < len(current_stage_data["calls"]))
-        features[26] = total_opponent_calls / max(len(opponent_positions), 1)
+            features[26] = 0
 
 
         # === BLUFFING INDICATORS ===
         # Bluff profitability = low equity + few opponents + already committed
         # (Bluffs work better when fewer players to fold out)
         bluff_opportunity = (1 - equity) * (1 / (num_active_players + 1e-9)) * commitment_ratio
-        features[27] = bluff_opportunity
+        features[27] = np.clip(bluff_opportunity, 0, 1)
 
         # Fold equity estimate based on pot size relative to opponent stacks
         # Large bets relative to opponent stacks = more fold pressure
         if opponent_positions:
             avg_opponent_stack = np.mean([stack_at_action[i] for i in opponent_positions])
             fold_pressure = cost / (avg_opponent_stack + 1e-9)
-            features[28] = np.clip(fold_pressure, 0, 2)  # Normalized fold pressure
+            features[28] = np.clip(fold_pressure, 0, 2) / 2
         else:
             features[28] = 0
 
@@ -570,8 +495,7 @@ class Player:
         # Equity between 0.3-0.5 is often a draw
         is_draw_range = 1 if 0.25 < equity < 0.55 else 0
         # Have a draw (is_draw_range = 1), not too committed, and in good (high) position
-        semi_bluff_opportunity = is_draw_range * (1 - commitment_ratio) * position_norm
-        features[29] = semi_bluff_opportunity
+        features[29] = is_draw_range * (1 - commitment_ratio) * position_norm
 
 
         # === ACTION HISTORY (WHAT HAVE I DONE THIS HAND?) ===
@@ -648,7 +572,7 @@ class Player:
 
         # Feature[35]: Check-raise VALUE
         # If we have a check-raise opportunity AND strong equity, this is very valuable
-        features[35] = equity * (1 if check_raise_opportunity else 0)
+        features[35] = equity * features[34]
         # Interpretation: High value (>0.7) = strong hand + check-raise opportunity = RAISE NOW!
         # Why it matters: Check-raising with strong hands wins more money
 
@@ -656,8 +580,7 @@ class Player:
         # === DECEPTION & TABLE IMAGE ===
         # Tight image: if we've folded/checked most of the time, bluffs are more credible
         total_actions = agent_total_checks + agent_total_calls + agent_total_raises + 1e-9
-        passivity_ratio = (agent_total_checks + agent_total_calls) / total_actions
-        features[36] = passivity_ratio
+        features[36] = (agent_total_checks + agent_total_calls) / total_actions
 
         # Deception opportunity: showed strength but now facing resistance
         # (can we fold a hand we represented as strong?)
@@ -670,13 +593,12 @@ class Player:
 
         # Weight recent strength more heavily (70% recent, 30% overall)
         apparent_strength = 0.7 * recent_strength + 0.3 * overall_strength
-        deception_opportunity = apparent_strength * (1 - equity) * other_player_last_aggressor
-        features[37] = deception_opportunity
+        features[37] = apparent_strength * (1 - equity) * features[17]
 
         # Trap opportunity: strong hand + passive play so far
         # (slowplay strong hands to induce bluffs)
-        trap_opportunity = equity * passivity_ratio * (1 if spr > 2 else 0)  # only with deep stacks
-        features[38] = trap_opportunity
+        deep_stack_flag = 1 if features[2] > 0.5 else 0  # SPR > 25
+        features[38] = equity * features[36] * deep_stack_flag
 
 
         # === STAGE PROGRESSION FEATURES ===
@@ -684,22 +606,18 @@ class Player:
         prev_contribution = sum(all_stage_data[i]["contribution"][position] for i in range(current_stage))
         current_contribution = current_stage_data["contribution"][position]
         
-        # Minimal Change: Normalize contributions by BB before calculating acceleration
-        prev_contribution_norm = prev_contribution / BB
-        current_contribution_norm = current_contribution / BB
-        contribution_acceleration = current_contribution_norm / (prev_contribution_norm + 1e-9)
-        features[39] = contribution_acceleration
+        # Normalize contributions by BB before calculating acceleration
+        features[39] = np.clip(current_contribution / (prev_contribution + 1e-9), 0, 5) / 5
 
         # Pot growth across streets (betting tempo)
         prev_street_pot = sum(all_stage_data[i]["community_pot_at_action"][position] for i in range(current_stage)) if current_stage > 0 else 0
         
         # Minimal Change: Normalize pot by BB before calculating acceleration
-        pot_acceleration = (community_pot / BB) / ((prev_street_pot / BB) + 1e-9)
-        features[40] = pot_acceleration
+        features[40] = np.clip(community_pot / (prev_street_pot + 1e-9), 0, 5) / 5
 
         # Late stage big bet indicator (turn/river aggression is more credible)
         late_stage = 1 if current_stage >= 2 else 0 # Turn or River
-        features[41] = late_stage * rtp_ratio
+        features[41] = late_stage * features[16]
 
 
         # === POSITIONAL DYNAMICS ===
@@ -716,7 +634,7 @@ class Player:
 
         # Feature[44]: Total Pot (Normalized by BB) - Added for full set
         # 💡 Minimal Change: Adding final feature, normalized by BB
-        features[44] = total_pot / BB
+        features[44] = np.clip(total_pot_bb / 50, 0, 1)
         
         return features
 
@@ -774,7 +692,7 @@ class Player:
         # General plot configuration
         plt.xlabel("Hand Number")
         plt.ylabel("Mean Squared TD Error")
-        plt.title("TD Error Over Training: Convergence Trend 📉")
+        plt.title("TD Error Over Training: Convergence Trend")
         plt.legend()
         plt.grid(True, alpha=0.3)
         plt.tight_layout()
