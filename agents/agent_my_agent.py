@@ -27,6 +27,7 @@ class Player:
         weights_file: str = None,
         num_update_passes: int = 1,
         isNotLearning: bool = True,
+        num_episodes: int = -1,
     ):
         # Required by environment
         self.name = name
@@ -36,12 +37,13 @@ class Player:
         # Hyperparameters
         self.epsilon = epsilon
         self.epsilon_decay = epsilon_decay
+        self.epsilon_min = 0.01
         self.alpha = alpha
         self.gamma = gamma
         self.big_blind = big_blind
         self.num_update_passes = num_update_passes
-
         self.isNotLearning = isNotLearning
+        self.num_episodes = num_episodes
 
         # state-action history
         self.episode_history = []
@@ -133,7 +135,7 @@ class Player:
     def decay_epsilon(self):
         """Decay epsilon after each hand."""
         self.epsilon *= self.epsilon_decay
-        self.epsilon = max(self.epsilon, 0.01)
+        self.epsilon = max(self.epsilon, self.epsilon_min)
 
 
     def _compute_ev_reward(self, info: Dict, action: Action) -> float:
@@ -287,7 +289,7 @@ class Player:
             print(f"   Weight max: {np.max(np.abs(self.weights[:, a_idx])):.2f}")
         
         # clip TD error to prevent exploding updates
-        td_error = np.clip(td_error, -5, 5)
+        td_error = np.clip(td_error, -3, 3)
         # Update with clipped gradient
         gradient = self.alpha * td_error * features
         gradient = np.clip(gradient, -0.5, 0.5)
@@ -662,40 +664,117 @@ class Player:
     # ====================================================================
     def plot_td_error(self, name: str = "td_error_progress.png"):
         import matplotlib.pyplot as plt
-        import pandas as pd # Import pandas for rolling calculation
-        import numpy as np # Keep numpy import if used elsewhere in the class
+        import pandas as pd
+        import numpy as np
 
         if len(self.hand_mean_squared_errors) == 0:
             print("No TD error data recorded.")
             return
 
-        # Use pandas Series for easy rolling average calculation
+        # --- 1. Data Preparation ---
         data_series = pd.Series(self.hand_mean_squared_errors)
-        
-        # Dynamic window: ~5-10% of data, minimum 5
+
+        # Calculate window size based on data length
+        # Assuming self.hand_mean_squared_errors length is 9300 for the plot example
         window = max(5, len(data_series) // 15)
-        
-        # Minimal Change: Use pandas rolling mean (which is a rolling average)
-        # .mean() is applied to the rolling object.
-        # .rolling(window=window) uses a trailing window (standard for time series).
+
+        # Calculate Rolling Average (Smoothed MSE)
+        # The .mean() will produce NaN for the first (window - 1) points
         smoothed = data_series.rolling(window=window).mean()
 
+        # --- 2. Plotting ---
         plt.figure(figsize=(12, 6))
-        
+
         # Plot Raw MSE (Faded)
         plt.plot(data_series.index, data_series.values, linewidth=1, alpha=0.3, label='Raw Hand MSE')
-        
-        # Plot Smoothed Rolling Average (Starting after the window size)
-        # We plot the index of the smoothed series, which aligns correctly with the data_series index.
+
+        # Plot Smoothed Rolling Average
         plt.plot(smoothed.index, smoothed.values, linewidth=2, color='blue', label=f'Rolling Average MSE (Window={window})')
+
+        # --- 3. Start/End MSE Annotations (New Feature) ---
+
+        # Find the first non-NaN value and its index (where the rolling average starts)
+        start_index = smoothed.first_valid_index()
+        end_index = smoothed.index[-1]
+
+        start_mse = smoothed.loc[start_index]
+        end_mse = smoothed.loc[end_index]
+
+        # Marker for Start MSE
+        plt.plot(start_index, start_mse, marker='o', markersize=10, color='blue', linestyle='', markeredgecolor='white', markeredgewidth=1)
         
-        # General plot configuration
-        plt.xlabel("Hand Number")
+        # enforce minimum x-offset so label never appears offscreen
+        safe_start_x = max(start_index, 5)
+
+        plt.annotate(
+            f"Start MSE: ~{start_mse:.2f}",
+            (safe_start_x, start_mse),
+            textcoords="offset points",
+            xytext=(10, 20),   # positive x offset so it's inside figure
+            ha="left",
+            color="blue",
+            arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=-0.2", color='blue')
+        )
+
+        # Marker for End MSE
+        plt.plot(end_index, end_mse, marker='o', markersize=10, color='blue', linestyle='', markeredgecolor='white', markeredgewidth=1)
+        plt.annotate(
+            f'End MSE: ~{end_mse:.2f}', 
+            (end_index, end_mse), 
+            textcoords="offset points", 
+            xytext=(-40, 20), # Offset text position
+            ha='right', 
+            color='blue', 
+            arrowprops=dict(arrowstyle="->", connectionstyle="arc3,rad=-0.2", color='blue')
+        )
+
+        # --- 4. Training Session Info (New Feature) ---
+
+        # NOTE: You must replace the placeholder values below with the actual attributes 
+        # from your class (e.g., self.num_episodes, self.epsilon_start, etc.)
+        # I am using hardcoded values based on the implied context.
+
+        # Assuming these are available as attributes in 'self'
+        training_info = f"""
+                        Episodes: {self.num_episodes}
+                        Epsilon: {self.epsilon} > {self.epsilon_min} (decay={self.epsilon_decay})
+                        Alpha (LR): {self.alpha}
+                        Gamma-Discount: {self.gamma}
+                        Passes: {self.num_update_passes}
+                        """ 
+        
+        # --- Title (Moved Up and Left) ---
+        plt.title(
+            "TD Error Over Training: Convergence Trend",
+            x=0.02,      # push title left
+            y=1.02,      # push title upward
+            loc='left'
+        )
+
+        # Reserve upper space for title & info box
+        plt.tight_layout(rect=[0, 0, 1, 0.90])
+
+        # --- Training Info Box (in reserved header section) ---
+        plt.figtext(
+            0.98,           # near right border
+            0.955,          # above title, inside header area
+            training_info.strip(),
+            fontsize=10,
+            family='monospace',
+            bbox=dict(boxstyle="round,pad=0.5", fc="white", alpha=0.85),
+            ha='right',     # align the right edge
+            va='top'
+        )
+
+        # --- 5. General Plot Configuration ---
+        plt.xlabel("Hand Number", y=-0.5)
         plt.ylabel("Mean Squared TD Error")
-        plt.title("TD Error Over Training: Convergence Trend")
         plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.tight_layout()
+        plt.grid(True, alpha=0.3) 
+
+        # Increase padding/spacing (New Feature)
+        plt.tight_layout(pad=3.0) 
+
         plt.savefig(name, dpi=150)
         print(f"Data points: {len(self.hand_mean_squared_errors)}, Window size: {window}")
         plt.show()

@@ -381,17 +381,17 @@ class SelfPlay:
 
         self.stack = 100 # hard coded for simplicity
         self.big_blind = 2
-        num_episodes =1500
+        num_episodes = 2000
         num_passes = 2
         e_decay = 0.9975
 
         # Name of the file to save weights to after training
-        save_weights_to_file = "weights_s100_bb2_epi1500_passes2_featuresV7"
+        save_weights_to_file = "weights_s100_bb2_epi2000_passes2_featuresV7"
         # Name of the file to save plotted results to after training
-        save_plot_to_file = "td_error_s100_bb2_epi1500_passes2_featuresV7"
+        save_plot_to_file = "td_error_s100_bb2_epi2000_passes2_featuresV7"
 
         # Name of file to load weights of last trained agent from
-        load_weights_last_trained_model = "weights_s100_bb2_epi1000_passes2_featuresV7"
+        load_weights_last_trained_model = "weights_s100_bb2_epi1500_passes2_featuresV7"
 
         training_agent = MyAgent(
             epsilon=1.0,
@@ -402,7 +402,8 @@ class SelfPlay:
             name="QAgent",
             stack_size=self.stack,
             num_update_passes=num_passes,
-            isNotLearning=False
+            isNotLearning=False,
+            num_episodes=num_episodes # Only for Graphing Purposes
         )
 
         self.env = gym.make(env_name, initial_stacks=self.stack, small_blind=1, big_blind=self.big_blind, render=self.render, funds_plot=False)
