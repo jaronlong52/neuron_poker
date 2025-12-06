@@ -339,14 +339,31 @@ class SelfPlay:
         # --------- Visualization ---------
         fig, ax = plt.subplots(figsize=(10, 6))
 
-        # Win counts bar chart
-        ax.bar(win_counts.keys(), win_counts.values(), color='steelblue', alpha=0.8)
+        # Win counts bar chart - Store the bar container for labeling
+        bars = ax.bar(win_counts.keys(), win_counts.values(), color='steelblue', alpha=0.8)
+        
+        # 🎯 Add the number of wins as labels above the bars
+        for bar in bars:
+            height = bar.get_height()
+            # Use ax.text to place the label at the top center of the bar
+            ax.text(
+                bar.get_x() + bar.get_width() / 2.,  # x-position: center of the bar
+                height + 0.5,                        # y-position: slightly above the bar
+                f'{height}',                         # The text to display (the win count)
+                ha='center',                         # Horizontal alignment: center
+                va='bottom'                          # Vertical alignment: bottom
+            )
+    
         ax.set_title("Test Win Counts", fontsize=14, fontweight='bold')
         ax.set_xlabel("Player")
         ax.set_ylabel("Wins")
         ax.tick_params(axis='x', rotation=45)
         ax.grid(axis='y', alpha=0.3)
-
+        
+        # Optional: Adjust y-axis limit to accommodate the labels
+        max_wins = max(win_counts.values()) if win_counts.values() else 0
+        ax.set_ylim(0, max_wins * 1.1) # Set max Y-limit to 110% of the max win count
+    
         plt.tight_layout()
         save_file += "_test_results.png"
         plt.savefig(save_file, dpi=150)
@@ -364,14 +381,14 @@ class SelfPlay:
 
         self.stack = 100 # hard coded for simplicity
         self.big_blind = 2
-        num_episodes =1000
+        num_episodes =1500
         num_passes = 2
-        e_decay = 0.997
+        e_decay = 0.9975
 
         # Name of the file to save weights to after training
-        save_weights_to_file = "weights_s100_bb2_epi1000_passes2_featuresV7"
+        save_weights_to_file = "weights_s100_bb2_epi1500_passes2_featuresV7"
         # Name of the file to save plotted results to after training
-        save_plot_to_file = "td_error_s100_bb2_epi1000_passes2_featuresV7"
+        save_plot_to_file = "td_error_s100_bb2_epi1500_passes2_featuresV7"
 
         # Name of file to load weights of last trained agent from
         load_weights_last_trained_model = "weights_s100_bb2_epi1000_passes2_featuresV7"
@@ -435,7 +452,7 @@ class SelfPlay:
         self.env.unwrapped.add_player(EquityPlayer(name='equity/50/50', min_call_equity=.5, min_bet_equity=-.5))
         self.env.unwrapped.add_player(last_trained_model_2)
         self.env.unwrapped.add_player(EquityPlayer(name='equity/50/80', min_call_equity=.8, min_bet_equity=-.8))
-        # self.env.unwrapped.add_player(last_trained_model_3)
+        self.env.unwrapped.add_player(last_trained_model_3)
         self.env.unwrapped.add_player(EquityPlayer(name='equity/70/70', min_call_equity=.7, min_bet_equity=-.7))
 
         # -------------------------
