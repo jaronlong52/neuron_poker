@@ -729,15 +729,9 @@ class Player:
         )
 
         # --- 4. Training Session Info (New Feature) ---
-
-        # NOTE: You must replace the placeholder values below with the actual attributes 
-        # from your class (e.g., self.num_episodes, self.epsilon_start, etc.)
-        # I am using hardcoded values based on the implied context.
-
-        # Assuming these are available as attributes in 'self'
         training_info = f"""
                         Episodes: {self.num_episodes}
-                        Epsilon: {self.epsilon} > {self.epsilon_min} (decay={self.epsilon_decay})
+                        Epsilon: 1.0 > {self.epsilon_min} (decay={self.epsilon_decay})
                         Alpha (LR): {self.alpha}
                         Gamma-Discount: {self.gamma}
                         Passes: {self.num_update_passes}

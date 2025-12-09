@@ -260,114 +260,106 @@ class SelfPlay:
         print(league_table)
         print(f"Best Player: {best_player}")
 
-    def my_agent_test(self, agent, weights_path, save_file="temp_name", test_episodes=1000):
+
+    def my_agent_test(self, agent, weights_path, save_file="temp_name", test_episodes=100):
         """
-        Test the agent using loaded weights.
-        Tracks win counts and produces a bar graph.
+        Test the agent using loaded weights against opponents.
+        Tracks win counts and visualizes results.
         """
         import matplotlib.pyplot as plt
+        import numpy as np
+        from datetime import datetime
 
-        # Load trained weights and configure for testing
+        # Configure agent for testing (no learning, no exploration)
         agent.load_weights(weights_path)
-        agent.isNotLearning = True  # Disable learning during testing
-        agent.epsilon = 0.0      # Disable exploration
+        agent.isNotLearning = True
+        agent.epsilon = 0.0
 
-        # Track wins per player
+        # Initialize tracking
         player_names = [p.name for p in self.env.unwrapped.players]
         win_counts = {name: 0 for name in player_names}
 
-        # Additional metrics
-        total_rewards = {name: 0.0 for name in player_names}
-        episode_lengths = []
+        print("=" * 60)
+        print(f"TESTING AGENT: {test_episodes} episodes")
+        print(f"Agent: {agent.name}")
+        print(f"Opponents: {', '.join([n for n in player_names if n != agent.name])}")
+        print("=" * 60)
 
-        print("### Starting Testing Phase ###")
         start_time = datetime.now()
 
+        # Run test episodes
         for ep in range(test_episodes):
-            print(f"[TEST] Episode {ep + 1}/{test_episodes}")
+            print(f"Progress: {ep + 1}/{test_episodes} episodes completed")
 
-            # Reset environment - this runs the entire episode
-            self.env.reset()
+            # Run full episode
+            obs, info = self.env.reset()
 
-            # Get final results from the completed episode
-            if len(agent.episode_history) == 0:
-                print(f"[TEST] WARNING: Episode {ep + 1} - episode_history empty, skipping...")
-                continue
-            
-            # Find the last non-marker entry in history
-            last_info = None
-            for info, _ in reversed(agent.episode_history):
-                if info is not None:
-                    last_info = info
-                    break
+            # Get final stacks from the info dictionary
+            # The stacks are normalized by (BB * 100), so multiply back
+            if info and 'player_data' in info:
+                final_stacks = np.array(info['player_data']['stack']) * (self.big_blind * 100)
+            else:
+                # Fallback: try to get from environment's funds_history
+                env_unwrapped = self.env.unwrapped
+                if hasattr(env_unwrapped, 'funds_history') and len(env_unwrapped.funds_history) > 0:
+                    final_stacks = env_unwrapped.funds_history.iloc[-1].values
+                else:
+                    print(f"[WARNING] Episode {ep + 1}: No final stack data available")
+                    continue
                 
-            if last_info is None:
-                print(f"[TEST] WARNING: Episode {ep + 1} - no valid info in history, skipping...")
-                continue
-            agent.episode_history = []  # Clear history for next episode
-
-            # Extract final stacks from player_data
-            player_data = last_info['player_data']
-            final_funds = np.array(player_data['stack']) * (self.big_blind * 100)
-            
-            # Determine winner and update metrics
-            winner_index = final_funds.argmax()
-            winner_name = player_names[winner_index]
+            # Determine winner (player with highest stack)
+            winner_idx = np.argmax(final_stacks)
+            winner_name = player_names[winner_idx]
             win_counts[winner_name] += 1
 
-            # Track total funds for each player
-            for i, name in enumerate(player_names):
-                total_rewards[name] += final_funds[i]
+            # Clear agent history for next episode
+            agent.episode_history = []
 
-            # Count actual actions (exclude markers)
-            action_count = sum(1 for info, _ in agent.episode_history if info is not None)
-            episode_lengths.append(action_count)
-
-        print("\n### Testing Finished ###")
         end_time = datetime.now()
-        time_difference = end_time - start_time
+        duration = end_time - start_time
 
-        print(f"Start time: {start_time}")
-        print(f"End time: {end_time}")
-        print(f"Duration: {time_difference}")
-        print(f"Average episode length: {np.mean(episode_lengths):.2f} actions")
+        # ========== RESULTS SUMMARY ==========
+        print("\n" + "=" * 60)
+        print("TEST RESULTS")
+        print("=" * 60)
+        print(f"Duration: {duration}")
+        print(f"Average time per episode: {duration.total_seconds() / test_episodes:.2f}s")
+        print(f"\nWin Distribution:")
 
-        print("\n### TEST RESULTS ###")
-        valid_episodes = sum(win_counts.values())
-        print(f"Valid episodes: {valid_episodes}/{test_episodes}")
+        for name in player_names:
+            win_pct = (win_counts[name] / test_episodes) * 100
+            print(f"  {name:20s}: {win_counts[name]:4d} wins ({win_pct:5.1f}%)")
 
-        # --------- Visualization ---------
+        print("=" * 60)
+
+        # ========== VISUALIZATION ==========
         fig, ax = plt.subplots(figsize=(10, 6))
 
-        # Win counts bar chart - Store the bar container for labeling
-        bars = ax.bar(win_counts.keys(), win_counts.values(), color='steelblue', alpha=0.8)
-        
-        # 🎯 Add the number of wins as labels above the bars
+        # Win Counts Bar Chart
+        bars = ax.bar(win_counts.keys(), win_counts.values(), color='steelblue', alpha=0.8, edgecolor='black')
+        ax.set_ylabel("Number of Wins", fontsize=11)
+        ax.set_title(f"Win Distribution - {agent.name} vs Opponents ({test_episodes} Games)", 
+                     fontsize=12, fontweight='bold')
+        ax.grid(axis='y', alpha=0.3, linestyle='--')
+        ax.tick_params(axis='x', rotation=45)
+
+        # Add win count labels on bars
         for bar in bars:
             height = bar.get_height()
-            # Use ax.text to place the label at the top center of the bar
-            ax.text(
-                bar.get_x() + bar.get_width() / 2.,  # x-position: center of the bar
-                height + 0.5,                        # y-position: slightly above the bar
-                f'{height}',                         # The text to display (the win count)
-                ha='center',                         # Horizontal alignment: center
-                va='bottom'                          # Vertical alignment: bottom
-            )
-    
-        ax.set_title(f"Test Win Counts - {test_episodes} Games Total", fontsize=14, fontweight='bold')
-        ax.set_xlabel("Player")
-        ax.set_ylabel("Wins")
-        ax.tick_params(axis='x', rotation=45)
-        ax.grid(axis='y', alpha=0.3)
-        
-        # Optional: Adjust y-axis limit to accommodate the labels
+            ax.text(bar.get_x() + bar.get_width() / 2., height,
+                    f'{int(height)}',
+                    ha='center', va='bottom', fontsize=10, fontweight='bold')
+
+        # Adjust y-limit for label space
         max_wins = max(win_counts.values()) if win_counts.values() else 0
-        ax.set_ylim(0, max_wins * 1.1) # Set max Y-limit to 110% of the max win count
-    
+        ax.set_ylim(0, max_wins * 1.15)
+
         plt.tight_layout()
+
+        # Save plot
         save_file += "_test_results.png"
-        plt.savefig(save_file, dpi=150)
-        print(f"\nPlot saved to: {save_file}")
+        plt.savefig(save_file, dpi=150, bbox_inches='tight')
+        print(f"\nVisualization saved to: {save_file}")
         plt.show()
 
 
@@ -464,7 +456,6 @@ class SelfPlay:
             if weights_file is None:
                 raise ValueError("weights_file must be provided when test_mode=True.")
 
-            print("### Running AGENT TEST MODE ###")
             self.my_agent_test(
                 agent=training_agent,
                 weights_path=weights_file,
