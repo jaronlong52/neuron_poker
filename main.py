@@ -261,7 +261,7 @@ class SelfPlay:
         print(f"Best Player: {best_player}")
 
 
-    def my_agent_test(self, agent, weights_path, save_file="temp_name", test_episodes=100):
+    def my_agent_test(self, agent, weights_path, save_file="temp_name", test_episodes=1000):
         """
         Test the agent using loaded weights against opponents.
         Tracks win counts and visualizes results.
