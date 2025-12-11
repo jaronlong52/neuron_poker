@@ -373,23 +373,24 @@ class SelfPlay:
 
         self.stack = 100 # hard coded for simplicity
         self.big_blind = 2
-        num_episodes = 2000
-        num_passes = 2
-        e_decay = 0.9975
+        num_episodes = 1600
+        num_passes = 4
+        e_decay = 0.998
 
         # Name of the file to save weights to after training
-        save_weights_to_file = "weights_s100_bb2_epi2000_passes2_featuresV7"
+        save_weights_to_file = "weights_s100_bb2_epi1600_passes4_featuresV7"
         # Name of the file to save plotted results to after training
-        save_plot_to_file = "td_error_s100_bb2_epi2000_passes2_featuresV7"
+        save_plot_to_file = "td_error_s100_bb2_epi1600_passes4_featuresV7"
 
         # Name of file to load weights of last trained agent from
         load_weights_last_trained_model = "weights_s100_bb2_epi2000_passes2_featuresV7"
+        # load_weights_last_trained_model_2 = "weights_s100_bb2_epi2000_passes2_featuresV7"
 
         training_agent = MyAgent(
             epsilon=1.0,
             epsilon_decay=e_decay,
-            alpha=0.005,
-            gamma=0.95,
+            alpha=0.003,
+            gamma=0.98,
             big_blind=self.big_blind,
             name="QAgent",
             stack_size=self.stack,
