@@ -172,8 +172,19 @@ class Player:
     def _choose_greedy(self, legal_actions: List[Action], info: Dict) -> Action:
         features = self._extract_features(info)
         q_values = np.dot(features, self.weights)
-        legal_q = [(a, q_values[self.action_order.index(a)]) for a in legal_actions]
-        return max(legal_q, key=lambda x: x[1])[0]
+        
+        best_action = None
+        best_q_value = float('-inf')
+        
+        for action in legal_actions:
+            action_index = self.action_order.index(action)
+            q_value = q_values[action_index]
+            
+            if q_value > best_q_value:
+                best_q_value = q_value
+                best_action = action
+        
+        return best_action
     
 
     # Called by environment at the end of each episode
